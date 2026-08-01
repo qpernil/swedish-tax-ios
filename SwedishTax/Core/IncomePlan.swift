@@ -1,6 +1,6 @@
 import Foundation
 
-struct Date2026: Equatable, Comparable, Sendable {
+struct Date2026: Codable, Equatable, Comparable, Sendable {
     var month: UInt8
     var day: UInt8
 
@@ -34,7 +34,7 @@ struct Date2026: Equatable, Comparable, Sendable {
     }
 }
 
-enum IncomeKind: String, CaseIterable, Identifiable, Sendable {
+enum IncomeKind: String, Codable, CaseIterable, Identifiable, Sendable {
     case annualSalary
     case monthlySalary
     case oneTimeSalary
@@ -86,14 +86,14 @@ enum IncomeKind: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-enum PayerRole: String, CaseIterable, Identifiable, Sendable {
+enum PayerRole: String, Codable, CaseIterable, Identifiable, Sendable {
     case main = "Main payer"
     case secondary = "Secondary payer"
 
     var id: Self { self }
 }
 
-struct RegularPensionPremium: Equatable, Sendable {
+struct RegularPensionPremium: Codable, Equatable, Sendable {
     static let monthlyThreshold: UInt32 = 52_125
     var monthlyOverride: UInt32?
 
@@ -113,7 +113,7 @@ struct RegularPensionPremium: Equatable, Sendable {
     }
 }
 
-struct SalaryExchange: Equatable, Sendable {
+struct SalaryExchange: Codable, Equatable, Sendable {
     static let defaultUpliftBasisPoints: UInt32 = 576
     static let allowanceMaximum: UInt32 = 592_000
 
@@ -159,7 +159,7 @@ struct SalaryExchange: Equatable, Sendable {
     }
 }
 
-struct VacationCompensation: Equatable, Sendable {
+struct VacationCompensation: Codable, Equatable, Sendable {
     var annualEntitlementDays: UInt32
     var payoutDays: UInt32
     var includedInPensionSalaryBasis = true
@@ -190,7 +190,7 @@ struct VacationCompensation: Equatable, Sendable {
     }
 }
 
-struct IncomeEntry: Identifiable, Equatable, Sendable {
+struct IncomeEntry: Codable, Identifiable, Equatable, Sendable {
     let id: UInt64
     var description = ""
     var kind: IncomeKind
@@ -335,7 +335,12 @@ struct IncomeEntry: Identifiable, Equatable, Sendable {
     }
 }
 
-struct IncomePlan: Equatable, Sendable {
+enum IncomePlanValidationIssue: Equatable, Sendable {
+    case invalidPaymentPeriod(entryID: UInt64)
+    case salaryExchangeExceedsAllowance(entryID: UInt64, maximum: UInt32)
+}
+
+struct IncomePlan: Codable, Equatable, Sendable {
     var entries: [IncomeEntry]
     var adjustmentPercent: UInt32?
     private var nextID: UInt64
@@ -371,7 +376,23 @@ struct IncomePlan: Equatable, Sendable {
         if entries.isEmpty { addEntry() }
     }
 
-    var isValid: Bool { entries.allSatisfy(\.isValid) }
+    var validationIssue: IncomePlanValidationIssue? {
+        for entry in entries where !entry.isValid {
+            return .invalidPaymentPeriod(entryID: entry.id)
+        }
+        for entry in entries where entry.salaryExchange != nil {
+            guard let allowance = salaryExchangeAllowance(for: entry.id) else { continue }
+            if entry.salaryExchangeSacrifice > allowance.maximumSacrifice {
+                return .salaryExchangeExceedsAllowance(
+                    entryID: entry.id,
+                    maximum: allowance.maximumSacrifice
+                )
+            }
+        }
+        return nil
+    }
+
+    var isValid: Bool { validationIssue == nil }
 
     var totals: IncomePlanTotals {
         entries.reduce(into: IncomePlanTotals()) { totals, entry in
@@ -407,11 +428,14 @@ struct IncomePlan: Equatable, Sendable {
         }
     }
 
-    func estimatedWithholding(table: UInt8, ageGroup: TaxAgeGroup) -> WithholdingSummary {
+    func estimatedWithholding(
+        table: UInt8,
+        ageGroup: TaxAgeGroup
+    ) throws -> WithholdingSummary {
         let totals = totals
-        let rows = entries.map { entry -> EntryWithholding in
+        let rows = try entries.map { entry -> EntryWithholding in
             let gross = entry.totalAnnualAmount
-            let result = entryWithholding(
+            let result = try entryWithholding(
                 entry,
                 gross: gross,
                 totals: totals,
@@ -472,7 +496,7 @@ struct IncomePlan: Equatable, Sendable {
         totals: IncomePlanTotals,
         table: UInt8,
         ageGroup: TaxAgeGroup
-    ) -> (UInt32, AppliedWithholding) {
+    ) throws -> (UInt32, AppliedWithholding) {
         if entry.kind.isDividend { return (0, .none) }
         if let percent = entry.customWithholdingPercent {
             return (percentage(gross, percent), .customPercent(percent))
@@ -488,11 +512,11 @@ struct IncomePlan: Equatable, Sendable {
             let percent = oneTimeWithholdingRate(column: column, annualIncome: totals.workIncome)
             return (percentage(gross, percent), .oneTimeTable(percent))
         }
-        let regularWithheld: UInt32
+        var regularWithheld: UInt32 = 0
         if entry.kind.isMonthly {
-            regularWithheld = (1...12).reduce(0) { total, month in
-                total.saturatingAdd(
-                    tableWithholding(
+            for month in 1...12 {
+                regularWithheld = regularWithheld.saturatingAdd(
+                    try tableWithholding(
                         table: table,
                         column: column,
                         income: entry.amount(forMonth: UInt8(month))
@@ -500,7 +524,7 @@ struct IncomePlan: Equatable, Sendable {
                 )
             }
         } else {
-            regularWithheld = annualizedTableWithholding(
+            regularWithheld = try annualizedTableWithholding(
                 table: table,
                 column: column,
                 annualIncome: entry.annualAmount
@@ -606,6 +630,7 @@ struct PlanCalculation: Equatable, Sendable {
     let ordinaryFinalTax: UInt32
     let dividendTax: UInt32
     let totalTax: UInt32
+    let withholding: WithholdingSummary
     let withheldTax: UInt32
     let regularPensionPremiums: UInt32
     let vacationPensionPremiums: UInt32
@@ -616,7 +641,7 @@ struct PlanCalculation: Equatable, Sendable {
     let pensionProgress: IncomeBasisEstimate
     let sgiProgress: IncomeBasisEstimate
 
-    init?(table: UInt8, ageGroup: TaxAgeGroup, plan: IncomePlan) {
+    init?(table: UInt8, ageGroup: TaxAgeGroup, plan: IncomePlan) throws {
         guard plan.isValid else { return nil }
         let totals = plan.totals
         annualIncome = totals.grossIncome
@@ -624,7 +649,7 @@ struct PlanCalculation: Equatable, Sendable {
         dividendIncome = totals.dividendIncome
         monthlyIncome = totals.monthlyTaxableIncome
         guard
-            let tableDeduction = TaxCalculator.monthlyDeduction(
+            let tableDeduction = try TaxCalculator.monthlyDeduction(
                 table: table,
                 column: ageGroup.salaryColumn,
                 grossMonthlyIncome: monthlyIncome
@@ -663,7 +688,8 @@ struct PlanCalculation: Equatable, Sendable {
         ordinaryFinalTax = adjustmentCalibration?.projectedOrdinaryTax ?? annualTax.total
         dividendTax = percentage(totals.dividendIncome, 20)
         totalTax = ordinaryFinalTax.saturatingAdd(dividendTax)
-        withheldTax = plan.estimatedWithholding(table: table, ageGroup: ageGroup).total
+        withholding = try plan.estimatedWithholding(table: table, ageGroup: ageGroup)
+        withheldTax = withholding.total
         regularPensionPremiums = totals.regularPensionPremiums
         vacationPensionPremiums = totals.vacationPensionPremiums
         salaryExchangeSacrifice = totals.salaryExchangeSacrifice
@@ -724,8 +750,12 @@ func oneTimeWithholdingRate(column: TaxColumn, annualIncome: UInt32) -> UInt32 {
     return thresholds.first(where: { annualIncome <= $0.0 })?.1 ?? 0
 }
 
-private func tableWithholding(table: UInt8, column: TaxColumn, income: UInt32) -> UInt32 {
-    guard let deduction = TaxCalculator.monthlyDeduction(
+private func tableWithholding(
+    table: UInt8,
+    column: TaxColumn,
+    income: UInt32
+) throws -> UInt32 {
+    guard let deduction = try TaxCalculator.monthlyDeduction(
         table: table,
         column: column,
         grossMonthlyIncome: income
@@ -737,8 +767,8 @@ private func annualizedTableWithholding(
     table: UInt8,
     column: TaxColumn,
     annualIncome: UInt32
-) -> UInt32 {
-    guard let deduction = TaxCalculator.monthlyDeduction(
+) throws -> UInt32 {
+    guard let deduction = try TaxCalculator.monthlyDeduction(
         table: table,
         column: column,
         grossMonthlyIncome: annualIncome / 12

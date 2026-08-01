@@ -15,6 +15,41 @@ final class TaxCalculatorTests: XCTestCase {
     ]
     private let taxableIncomeBreakpoints: [UInt32] = [40_000, 118_400, 240_000, 643_200]
 
+    func testPersistedAppStateRoundTripsTheCompletePlan() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = AppStateStore(
+            fileURL: directory.appendingPathComponent("income-plan.json")
+        )
+
+        var plan = IncomePlan(monthlySalary: 93_000)
+        plan.adjustmentPercent = 33
+        plan.entries[0].end = Date2026(month: 10, day: 18)
+        plan.entries[0].adjustmentApplies = true
+        plan.entries[0].vacationCompensation = VacationCompensation(
+            annualEntitlementDays: 30,
+            start: plan.entries[0].start,
+            end: plan.entries[0].end
+        )
+        let pensionID = plan.addEntry(kind: .monthlyOccupationalPension)
+        let pensionIndex = try XCTUnwrap(plan.entries.firstIndex { $0.id == pensionID })
+        plan.entries[pensionIndex].amount = 27_500
+        plan.entries[pensionIndex].start = Date2026(month: 8, day: 1)
+
+        let expected = PersistedAppState(
+            table: 34,
+            ageGroup: .atLeast66,
+            plan: plan
+        )
+        try store.save(expected)
+        let restored = try XCTUnwrap(store.load())
+        XCTAssertEqual(restored, expected)
+
+        var restoredPlan = restored.plan
+        XCTAssertEqual(restoredPlan.addEntry(), 3)
+    }
+
     func testOfficialResourceIsPreservedByteForByte() throws {
         let data = try TaxTables.sourceData()
         let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
@@ -48,7 +83,7 @@ final class TaxCalculatorTests: XCTestCase {
                         ? .amount(row.values[index])
                         : .percent(row.values[index])
                     XCTAssertEqual(
-                        TaxCalculator.monthlyDeduction(
+                        try TaxCalculator.monthlyDeduction(
                             table: table,
                             column: column,
                             grossMonthlyIncome: row.minimum
@@ -56,7 +91,7 @@ final class TaxCalculatorTests: XCTestCase {
                         expected
                     )
                     XCTAssertEqual(
-                        TaxCalculator.monthlyDeduction(
+                        try TaxCalculator.monthlyDeduction(
                             table: table,
                             column: column,
                             grossMonthlyIncome: row.maximum
@@ -155,7 +190,7 @@ final class TaxCalculatorTests: XCTestCase {
 
     func testAnnualizedFormulaMatchesEveryMonthlyAmountEntry() throws {
         for table in TaxCalculator.minTaxTable...TaxCalculator.maxTaxTable {
-            for row in try XCTUnwrap(TaxTables.rows(for: table)) where row.kind == .amount {
+            for row in try XCTUnwrap(try TaxTables.rows(for: table)) where row.kind == .amount {
                 let annualIncome = row.maximum * 12
                 for (index, column) in columns.enumerated() {
                     let annual = try XCTUnwrap(
@@ -177,7 +212,7 @@ final class TaxCalculatorTests: XCTestCase {
 
     func testAnnualizedFormulaMatchesEveryMonthlyPercentageEntry() throws {
         for table in TaxCalculator.minTaxTable...TaxCalculator.maxTaxTable {
-            for row in try XCTUnwrap(TaxTables.rows(for: table)) where row.kind == .percent {
+            for row in try XCTUnwrap(try TaxTables.rows(for: table)) where row.kind == .percent {
                 let firstBracketMaximum = (row.minimum + 199) / 200 * 200
                 let monthlyIncomes = row.maximum == UInt32.max
                     ? [firstBracketMaximum]
@@ -287,7 +322,7 @@ final class TaxCalculatorTests: XCTestCase {
 
     func testCalculationModelMatchesRustGUIBehavior() throws {
         let defaultCalculation = try XCTUnwrap(
-            TaxCalculation(
+            try TaxCalculation(
                 table: 32,
                 column: .column1,
                 period: .monthly,
@@ -299,7 +334,7 @@ final class TaxCalculatorTests: XCTestCase {
         XCTAssertGreaterThan(UInt64(55_034) * 12, 660_400)
 
         let monthly = try XCTUnwrap(
-            TaxCalculation(
+            try TaxCalculation(
                 table: 34,
                 column: .column1,
                 period: .monthly,
@@ -325,7 +360,7 @@ final class TaxCalculatorTests: XCTestCase {
         )
 
         let annual = try XCTUnwrap(
-            TaxCalculation(
+            try TaxCalculation(
                 table: 32,
                 column: .column3,
                 period: .annual,
@@ -350,7 +385,7 @@ final class TaxCalculatorTests: XCTestCase {
         )
 
         let zero = try XCTUnwrap(
-            TaxCalculation(
+            try TaxCalculation(
                 table: 33,
                 column: .column1,
                 period: .monthly,
@@ -502,7 +537,7 @@ final class TaxCalculatorTests: XCTestCase {
 
     func testMonthlyAndAnnualInputsProduceTheSameIncomeBasisProgress() throws {
         let monthly = try XCTUnwrap(
-            TaxCalculation(
+            try TaxCalculation(
                 table: 32,
                 column: .column1,
                 period: .monthly,
@@ -510,7 +545,7 @@ final class TaxCalculatorTests: XCTestCase {
             )
         )
         let annual = try XCTUnwrap(
-            TaxCalculation(
+            try TaxCalculation(
                 table: 32,
                 column: .column1,
                 period: .annual,
@@ -629,7 +664,7 @@ final class TaxCalculatorTests: XCTestCase {
         XCTAssertEqual(totals.vacationPensionPremiums, 34_765)
         XCTAssertEqual(totals.totalEmployerPensionContributions, 174_719)
 
-        let withholding = plan.estimatedWithholding(table: 32, ageGroup: .under66)
+        let withholding = try plan.estimatedWithholding(table: 32, ageGroup: .under66)
         XCTAssertEqual(withholding.entries[0].gross, 1_006_883)
         XCTAssertEqual(withholding.entries[0].withheld, 332_271)
         XCTAssertEqual(withholding.entries[0].rule, .adjustmentPercent(33))
@@ -639,7 +674,7 @@ final class TaxCalculatorTests: XCTestCase {
         XCTAssertEqual(withholding.total, 455_031)
 
         let calculation = try XCTUnwrap(
-            PlanCalculation(table: 32, ageGroup: .under66, plan: plan)
+            try PlanCalculation(table: 32, ageGroup: .under66, plan: plan)
         )
         let calibration = try XCTUnwrap(calculation.adjustmentCalibration)
         XCTAssertEqual(calibration.basisIncome, 1_116_000)
@@ -684,7 +719,7 @@ final class TaxCalculatorTests: XCTestCase {
         XCTAssertEqual(totals.adjustmentBasisWorkIncome, 1_116_000)
         XCTAssertEqual(totals.totalEmployerPensionContributions, 174_719)
 
-        let withholding = plan.estimatedWithholding(table: 32, ageGroup: .under66)
+        let withholding = try plan.estimatedWithholding(table: 32, ageGroup: .under66)
         XCTAssertEqual(withholding.entries[0].withheld, 332_271)
         XCTAssertEqual(withholding.entries[0].rule, .adjustmentPercent(33))
         XCTAssertEqual(withholding.entries[1].withheld, 122_760)
@@ -695,7 +730,7 @@ final class TaxCalculatorTests: XCTestCase {
         XCTAssertEqual(withholding.total, 496_281)
 
         let calculation = try XCTUnwrap(
-            PlanCalculation(table: 32, ageGroup: .under66, plan: plan)
+            try PlanCalculation(table: 32, ageGroup: .under66, plan: plan)
         )
         let calibration = try XCTUnwrap(calculation.adjustmentCalibration)
         XCTAssertEqual(calibration.basisIncome, 1_116_000)
@@ -745,6 +780,32 @@ final class TaxCalculatorTests: XCTestCase {
         XCTAssertEqual(totals.totalEmployerPensionContributions, 352_408)
     }
 
+    func testSalaryExchangeIsInvalidatedWhenOtherPensionContributionsIncrease() throws {
+        var plan = IncomePlan(annualSalary: 1_000_000)
+        let lumpID = plan.addEntry(kind: .oneTimeSalary)
+        let lumpIndex = try XCTUnwrap(plan.entries.firstIndex { $0.id == lumpID })
+        plan.entries[lumpIndex].amount = 300_000
+        plan.entries[lumpIndex].salaryExchange = SalaryExchange()
+
+        let originalMaximum = try XCTUnwrap(
+            plan.salaryExchangeAllowance(for: lumpID)?.maximumSacrifice
+        )
+        XCTAssertGreaterThan(originalMaximum, 0)
+        plan.entries[lumpIndex].salaryExchange?.sacrificedSalary = originalMaximum
+        XCTAssertNil(plan.validationIssue)
+
+        plan.entries[0].regularPensionPremium?.monthlyOverride = 25_000
+        let reducedMaximum = try XCTUnwrap(
+            plan.salaryExchangeAllowance(for: lumpID)?.maximumSacrifice
+        )
+        XCTAssertLessThan(reducedMaximum, originalMaximum)
+        XCTAssertEqual(
+            plan.validationIssue,
+            .salaryExchangeExceedsAllowance(entryID: lumpID, maximum: reducedMaximum)
+        )
+        XCTAssertNil(try PlanCalculation(table: 32, ageGroup: .under66, plan: plan))
+    }
+
     func testWithholdingPrecedenceMatchesRustGUI() throws {
         var plan = IncomePlan(annualSalary: 700_000)
         let pensionID = plan.addEntry(kind: .annualOccupationalPension)
@@ -753,7 +814,7 @@ final class TaxCalculatorTests: XCTestCase {
         plan.entries[index].payerRole = .secondary
 
         var row = try XCTUnwrap(
-            plan.estimatedWithholding(table: 32, ageGroup: .under66)
+            try plan.estimatedWithholding(table: 32, ageGroup: .under66)
                 .entries.first { $0.entryID == pensionID }
         )
         XCTAssertEqual(row.withheld, 30_000)
@@ -762,7 +823,7 @@ final class TaxCalculatorTests: XCTestCase {
         plan.adjustmentPercent = 38
         plan.entries[index].adjustmentApplies = true
         row = try XCTUnwrap(
-            plan.estimatedWithholding(table: 32, ageGroup: .under66)
+            try plan.estimatedWithholding(table: 32, ageGroup: .under66)
                 .entries.first { $0.entryID == pensionID }
         )
         XCTAssertEqual(row.withheld, 38_000)
@@ -770,7 +831,7 @@ final class TaxCalculatorTests: XCTestCase {
 
         plan.entries[index].customWithholdingPercent = 42
         row = try XCTUnwrap(
-            plan.estimatedWithholding(table: 32, ageGroup: .under66)
+            try plan.estimatedWithholding(table: 32, ageGroup: .under66)
                 .entries.first { $0.entryID == pensionID }
         )
         XCTAssertEqual(row.withheld, 42_000)
@@ -785,7 +846,7 @@ final class TaxCalculatorTests: XCTestCase {
         plan.entries[0].useFullYearProjectionAsAdjustmentBasis = true
 
         let calculation = try XCTUnwrap(
-            PlanCalculation(table: 32, ageGroup: .under66, plan: plan)
+            try PlanCalculation(table: 32, ageGroup: .under66, plan: plan)
         )
         let calibration = try XCTUnwrap(calculation.adjustmentCalibration)
         XCTAssertEqual(calibration.basisIncome, 1_116_000)
@@ -805,14 +866,14 @@ final class TaxCalculatorTests: XCTestCase {
         plan.entries[index].amount = 200_000
 
         let calculation = try XCTUnwrap(
-            PlanCalculation(table: 32, ageGroup: .under66, plan: plan)
+            try PlanCalculation(table: 32, ageGroup: .under66, plan: plan)
         )
         XCTAssertEqual(calculation.annualIncome, 620_000)
         XCTAssertEqual(calculation.dividendTax, 40_000)
         XCTAssertEqual(calculation.totalTax, calculation.annualTax.total + 40_000)
         XCTAssertEqual(
             calculation.withheldTax,
-            IncomePlan(annualSalary: 420_000)
+            try IncomePlan(annualSalary: 420_000)
                 .estimatedWithholding(table: 32, ageGroup: .under66).total
         )
     }
@@ -831,7 +892,7 @@ final class TaxCalculatorTests: XCTestCase {
         _ column: TaxColumn,
         _ income: UInt32
     ) -> TaxDeduction? {
-        TaxCalculator.monthlyDeduction(
+        try? TaxCalculator.monthlyDeduction(
             table: table,
             column: column,
             grossMonthlyIncome: income

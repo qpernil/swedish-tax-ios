@@ -1,32 +1,74 @@
 import SwiftUI
 import UIKit
 
+private enum CalculationState {
+    case available(PlanCalculation)
+    case invalid(IncomePlanValidationIssue?)
+    case taxDataUnavailable(String)
+
+    var calculation: PlanCalculation? {
+        guard case let .available(calculation) = self else { return nil }
+        return calculation
+    }
+
+    var withholding: WithholdingSummary? { calculation?.withholding }
+}
+
 struct ContentView: View {
-    @State private var table: UInt8 = 32
-    @State private var ageGroup: TaxAgeGroup = .under66
-    @State private var plan = IncomePlan(monthlySalary: 55_033)
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var table: UInt8
+    @State private var ageGroup: TaxAgeGroup
+    @State private var plan: IncomePlan
     @State private var editingEntryID: UInt64?
     @State private var helpTopic: HelpTopic?
     @State private var showingAbout = false
     @State private var showingTrace = false
 
-    private var calculation: PlanCalculation? {
-        PlanCalculation(table: table, ageGroup: ageGroup, plan: plan)
+    private var calculationState: CalculationState {
+        if let issue = plan.validationIssue {
+            return .invalid(issue)
+        }
+        do {
+            guard let calculation = try PlanCalculation(
+                table: table,
+                ageGroup: ageGroup,
+                plan: plan
+            ) else {
+                return .invalid(nil)
+            }
+            return .available(calculation)
+        } catch {
+            return .taxDataUnavailable(error.localizedDescription)
+        }
+    }
+
+    private var persistedState: PersistedAppState {
+        PersistedAppState(table: table, ageGroup: ageGroup, plan: plan)
+    }
+
+    init() {
+        let restored: PersistedAppState? = try? AppStateStore.live.load()
+        let state = restored ?? PersistedAppState()
+        _table = State(initialValue: state.table)
+        _ageGroup = State(initialValue: state.ageGroup)
+        _plan = State(initialValue: state.plan)
     }
 
     var body: some View {
+        let calculationState = calculationState
+        let stateToPersist = persistedState
         NavigationStack {
             ScrollView {
                 LazyVStack(spacing: 16) {
                     hero
                     setupCard
-                    incomePlanCard
+                    incomePlanCard(withholding: calculationState.withholding)
                     adjustmentCard
 
-                    if let calculation {
+                    if let calculation = calculationState.calculation {
                         results(calculation)
                     } else {
-                        unavailableCard
+                        unavailableCard(for: calculationState)
                     }
 
                     Text("Preliminary estimate based on Skatteverket tables and SKV 433, edition 36.")
@@ -73,15 +115,27 @@ struct ContentView: View {
                 }
             }
             .sheet(isPresented: $showingTrace) {
-                if let calculation {
+                if let calculation = calculationState.calculation {
                     CalculationTraceView(
                         plan: plan,
-                        table: table,
-                        ageGroup: ageGroup,
                         calculation: calculation
                     )
                 }
             }
+        }
+        .task(id: stateToPersist) {
+            do {
+                try await Task.sleep(for: .milliseconds(350))
+                try AppStateStore.live.save(stateToPersist)
+            } catch is CancellationError {
+                // A newer edit superseded this pending save.
+            } catch {
+                assertionFailure("Unable to save income plan: \(error)")
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase != .active else { return }
+            try? AppStateStore.live.save(persistedState)
         }
     }
 
@@ -150,7 +204,7 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var incomePlanCard: some View {
+    private func incomePlanCard(withholding: WithholdingSummary?) -> some View {
         TaxCard {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
@@ -173,10 +227,7 @@ struct ContentView: View {
                     Button { editingEntryID = entry.id } label: {
                         IncomeEntryRow(
                             entry: entry,
-                            withholding: plan.estimatedWithholding(
-                                table: table,
-                                ageGroup: ageGroup
-                            ).entries.first { $0.entryID == entry.id }
+                            withholding: withholding?.entries.first { $0.entryID == entry.id }
                         )
                     }
                     .buttonStyle(.plain)
@@ -384,13 +435,36 @@ struct ContentView: View {
         }
     }
 
-    private var unavailableCard: some View {
+    @ViewBuilder
+    private func unavailableCard(for state: CalculationState) -> some View {
         TaxCard {
-            ContentUnavailableView(
-                "Calculation unavailable",
-                systemImage: "exclamationmark.triangle",
-                description: Text("Check that each payment period ends after it starts.")
-            )
+            switch state {
+            case .available:
+                EmptyView()
+            case let .invalid(issue):
+                ContentUnavailableView(
+                    "Calculation unavailable",
+                    systemImage: "exclamationmark.triangle",
+                    description: Text(validationMessage(for: issue))
+                )
+            case let .taxDataUnavailable(message):
+                ContentUnavailableView(
+                    "Tax data unavailable",
+                    systemImage: "doc.badge.exclamationmark",
+                    description: Text(message)
+                )
+            }
+        }
+    }
+
+    private func validationMessage(for issue: IncomePlanValidationIssue?) -> String {
+        switch issue {
+        case .invalidPaymentPeriod:
+            "Check that each payment period ends after it starts."
+        case let .salaryExchangeExceedsAllowance(_, maximum):
+            "Salary exchange exceeds the current maximum of \(formatSEK(maximum)). Open the entry and reduce it."
+        case nil:
+            "Check the income-plan values and try again."
         }
     }
 
@@ -521,6 +595,13 @@ private struct IncomeEntryEditor: View {
     private var entry: Binding<IncomeEntry>? {
         guard let entryIndex else { return nil }
         return $plan.entries[entryIndex]
+    }
+
+    private var withholdingResult: Result<EntryWithholding?, Error> {
+        Result {
+            try plan.estimatedWithholding(table: table, ageGroup: ageGroup)
+                .entries.first { $0.entryID == entryID }
+        }
     }
 
     var body: some View {
@@ -822,14 +903,21 @@ private struct IncomeEntryEditor: View {
                         maximum: 100
                     )
                 }
-                if let withholding = plan.estimatedWithholding(
-                    table: table,
-                    ageGroup: ageGroup
-                ).entries.first(where: { $0.entryID == entryID }) {
+                switch withholdingResult {
+                case let .success(withholding?):
                     Divider()
                     LabeledContent("Calculated withholding", value: formatSEK(withholding.withheld))
                         .fontWeight(.semibold)
                     Text(withholding.rule.description)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                case .success(nil):
+                    EmptyView()
+                case let .failure(error):
+                    Divider()
+                    Label("Tax data unavailable", systemImage: "doc.badge.exclamationmark")
+                        .font(.subheadline.weight(.semibold))
+                    Text(error.localizedDescription)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -1004,8 +1092,6 @@ private final class KeyboardDismissUIView: UIView, UIGestureRecognizerDelegate {
 
 private struct CalculationTraceView: View {
     let plan: IncomePlan
-    let table: UInt8
-    let ageGroup: TaxAgeGroup
     let calculation: PlanCalculation
     @Environment(\.dismiss) private var dismiss
 
@@ -1035,7 +1121,7 @@ private struct CalculationTraceView: View {
                         ValueRows(rows: [ValueRow("Total", formatSEK(calculation.annualIncome), isTotal: true)])
                     }
                     TraceStep(number: 2, title: "Payer withholding") {
-                        let withholding = plan.estimatedWithholding(table: table, ageGroup: ageGroup)
+                        let withholding = calculation.withholding
                         ForEach(withholding.entries, id: \.entryID) { row in
                             if let entry = plan.entries.first(where: { $0.id == row.entryID }) {
                                 VStack(alignment: .leading, spacing: 2) {

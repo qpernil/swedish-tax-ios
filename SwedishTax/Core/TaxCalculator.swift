@@ -30,8 +30,8 @@ enum TaxCalculator {
         table: UInt8,
         column: TaxColumn,
         grossMonthlyIncome: UInt32
-    ) -> TaxDeduction? {
-        guard let rows = TaxTables.rows(for: table) else { return nil }
+    ) throws -> TaxDeduction? {
+        guard let rows = try TaxTables.rows(for: table) else { return nil }
         guard grossMonthlyIncome != 0 else { return .amount(0) }
 
         var low = 0

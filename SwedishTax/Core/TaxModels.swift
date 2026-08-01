@@ -43,7 +43,7 @@ enum TaxColumn: UInt8, CaseIterable, Identifiable, Sendable {
     var index: Int { Int(rawValue) - 1 }
 }
 
-enum TaxAgeGroup: String, CaseIterable, Identifiable, Sendable {
+enum TaxAgeGroup: String, Codable, CaseIterable, Identifiable, Sendable {
     case under66 = "Under 66"
     case atLeast66 = "66 or older"
 
@@ -126,7 +126,7 @@ struct TaxCalculation: Equatable, Sendable {
         column: TaxColumn,
         period: IncomePeriod,
         income: UInt32
-    ) {
+    ) throws {
         switch period {
         case .monthly:
             monthlyIncome = income
@@ -139,7 +139,7 @@ struct TaxCalculation: Equatable, Sendable {
         }
 
         guard
-            let deduction = TaxCalculator.monthlyDeduction(
+            let deduction = try TaxCalculator.monthlyDeduction(
                 table: table,
                 column: column,
                 grossMonthlyIncome: monthlyIncome

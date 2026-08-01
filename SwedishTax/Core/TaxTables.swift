@@ -12,7 +12,7 @@ struct TaxRow: Equatable, Sendable {
     let kind: TaxRowKind
 }
 
-enum TaxTableSourceError: Error, CustomStringConvertible {
+enum TaxTableSourceError: Error, CustomStringConvertible, LocalizedError {
     case resourceMissing
     case invalidRecordCount(actual: Int)
     case invalidRecord(line: Int, reason: String)
@@ -30,6 +30,8 @@ enum TaxTableSourceError: Error, CustomStringConvertible {
             "Tax table \(table) \(reason)."
         }
     }
+
+    var errorDescription: String? { description }
 }
 
 enum TaxTables {
@@ -45,8 +47,8 @@ enum TaxTables {
         try loadResult.get()
     }
 
-    static func rows(for table: UInt8) -> [TaxRow]? {
-        try? loadResult.get()[table]
+    static func rows(for table: UInt8) throws -> [TaxRow]? {
+        try loadResult.get()[table]
     }
 
     static func sourceData() throws -> Data {

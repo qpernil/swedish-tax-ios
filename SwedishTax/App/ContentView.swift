@@ -369,7 +369,8 @@ struct ContentView: View {
                 value: formatSEK(calculation.annualNet),
                 systemImage: "banknote.fill",
                 color: .taxPrimary,
-                detail: taxBalanceSummary(calculation.taxBalance)
+                detail: taxBalanceSummary(calculation.taxBalance),
+                detailColor: taxBalanceColor(calculation.taxBalance)
             )
 
             reconciliationCard(calculation)
@@ -539,7 +540,13 @@ struct ContentView: View {
                 at: 1
             )
         }
-        rows.append(ValueRow("Expected balance", taxBalanceValue(value.taxBalance), isTotal: true))
+        rows.append(ValueRow(
+            "Expected balance",
+            taxBalanceValue(value.taxBalance),
+            isTotal: true,
+            valueColor: taxBalanceColor(value.taxBalance),
+            detail: taxBalanceKind(value.taxBalance)
+        ))
         return rows
     }
 
@@ -1301,7 +1308,13 @@ private struct CalculationTraceView: View {
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }
-                        ValueRows(rows: [ValueRow("Expected balance", taxBalanceValue(calculation.taxBalance), isTotal: true)])
+                        ValueRows(rows: [ValueRow(
+                            "Expected balance",
+                            taxBalanceValue(calculation.taxBalance),
+                            isTotal: true,
+                            valueColor: taxBalanceColor(calculation.taxBalance),
+                            detail: taxBalanceKind(calculation.taxBalance)
+                        )])
                     }
                 }
                 .padding(16)
@@ -1687,6 +1700,7 @@ private struct ResultCard: View {
     let systemImage: String
     let color: Color
     var detail: String?
+    var detailColor: Color = .primary
     var detailAction: (() -> Void)?
 
     var body: some View {
@@ -1717,7 +1731,7 @@ private struct ResultCard: View {
                             }
                         }
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(detailColor)
                     }
                 }
                 Spacer(minLength: 0)
@@ -1753,11 +1767,21 @@ private struct ValueRow: Identifiable {
     let label: String
     let value: String
     let isTotal: Bool
+    let valueColor: Color
+    let detail: String?
 
-    init(_ label: String, _ value: String, isTotal: Bool = false) {
+    init(
+        _ label: String,
+        _ value: String,
+        isTotal: Bool = false,
+        valueColor: Color = .primary,
+        detail: String? = nil
+    ) {
         self.label = label
         self.value = value
         self.isTotal = isTotal
+        self.valueColor = valueColor
+        self.detail = detail
     }
 }
 
@@ -1772,9 +1796,17 @@ private struct ValueRows: View {
                     Text(row.label)
                         .foregroundStyle(row.isTotal ? .primary : .secondary)
                     Spacer(minLength: 10)
-                    Text(row.value)
-                        .fontWeight(row.isTotal ? .bold : .semibold)
-                        .multilineTextAlignment(.trailing)
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text(row.value)
+                            .fontWeight(row.isTotal ? .bold : .semibold)
+                            .multilineTextAlignment(.trailing)
+                        if let detail = row.detail {
+                            Text(detail)
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                        }
+                    }
+                    .foregroundStyle(row.valueColor)
                 }
                 .font(row.isTotal ? .body : .subheadline)
                 .padding(.vertical, row.isTotal ? 11 : 9)
@@ -1926,14 +1958,20 @@ private func deductionText(_ deduction: TaxDeduction) -> String {
         : "\(deduction.value)% of payment"
 }
 private func taxBalanceSummary(_ balance: Int64) -> String {
-    balance > 0 ? "Expected amount to pay: \(formatSEK(UInt32(balance)))"
-        : balance < 0 ? "Expected refund: \(formatSEK(UInt32(-balance)))"
-        : "No expected balance"
+    balance == 0
+        ? "No expected balance"
+        : "Expected balance: \(taxBalanceValue(balance)) · \(taxBalanceKind(balance))"
 }
 private func taxBalanceValue(_ balance: Int64) -> String {
-    balance > 0 ? "Pay \(formatSEK(UInt32(balance)))"
-        : balance < 0 ? "Refund \(formatSEK(UInt32(-balance)))"
+    balance > 0 ? "−\(formatSEK(UInt32(balance)))"
+        : balance < 0 ? "+\(formatSEK(UInt32(-balance)))"
         : formatSEK(0)
+}
+private func taxBalanceKind(_ balance: Int64) -> String {
+    balance > 0 ? "Tax debt" : balance < 0 ? "Tax refund" : "Settled"
+}
+private func taxBalanceColor(_ balance: Int64) -> Color {
+    balance > 0 ? .red : balance < 0 ? .taxGreen : .primary
 }
 private func monthName(_ month: UInt8) -> String {
     Calendar.current.monthSymbols[Int(min(max(month, 1), 12)) - 1]

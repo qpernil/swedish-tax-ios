@@ -859,6 +859,34 @@ final class TaxCalculatorTests: XCTestCase {
         XCTAssertEqual(calculation.taxBalance, -42_750)
     }
 
+    func testFullYearAdjustmentCalibrationAnchorsProjectionAtZeroBalance() throws {
+        var projectedPlan = IncomePlan(monthlySalary: 93_000)
+        projectedPlan.adjustmentPercent = 33
+        projectedPlan.entries[0].adjustmentApplies = true
+        projectedPlan.entries[0].useFullYearProjectionAsAdjustmentBasis = true
+
+        let projected = try XCTUnwrap(
+            try PlanCalculation(table: 32, ageGroup: .under66, plan: projectedPlan)
+        )
+        let calibration = try XCTUnwrap(projected.adjustmentCalibration)
+        XCTAssertEqual(projected.annualIncome, calibration.basisIncome)
+        XCTAssertEqual(projected.ordinaryFinalTax, calibration.assumedTaxAtBasis)
+        XCTAssertEqual(projected.withheldTax, calibration.assumedTaxAtBasis)
+        XCTAssertEqual(projected.taxBalance, 0)
+
+        var actualPlan = projectedPlan
+        actualPlan.entries[0].end = Date2026(month: 10, day: 18)
+        let actual = try XCTUnwrap(
+            try PlanCalculation(table: 32, ageGroup: .under66, plan: actualPlan)
+        )
+        let formulaChange = Int64(actual.annualTax.total)
+            - Int64(calibration.formulaTaxAtBasis)
+        let withholdingChange = Int64(actual.withheldTax)
+            - Int64(calibration.assumedTaxAtBasis)
+        XCTAssertEqual(actual.taxBalance, formulaChange - withholdingChange)
+        XCTAssertEqual(actual.taxBalance, -42_750)
+    }
+
     func testDividendAddsFinalTaxWithoutWithholding() throws {
         var plan = IncomePlan(annualSalary: 420_000)
         let dividendID = plan.addEntry(kind: .ownCompanyDividend)

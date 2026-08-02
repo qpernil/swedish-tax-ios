@@ -63,7 +63,7 @@ struct ContentView: View {
                     hero
                     setupCard
                     incomePlanCard(withholding: calculationState.withholding)
-                    adjustmentCard
+                    adjustmentCard(calibration: calculationState.calculation?.adjustmentCalibration)
 
                     if let calculation = calculationState.calculation {
                         results(calculation)
@@ -118,6 +118,7 @@ struct ContentView: View {
                 if let calculation = calculationState.calculation {
                     CalculationTraceView(
                         plan: plan,
+                        table: table,
                         calculation: calculation
                     )
                 }
@@ -227,7 +228,8 @@ struct ContentView: View {
                     Button { editingEntryID = entry.id } label: {
                         IncomeEntryRow(
                             entry: entry,
-                            withholding: withholding?.entries.first { $0.entryID == entry.id }
+                            withholding: withholding?.entries.first { $0.entryID == entry.id },
+                            adjustmentPercent: plan.adjustmentPercent
                         )
                     }
                     .buttonStyle(.plain)
@@ -249,8 +251,22 @@ struct ContentView: View {
         }
     }
 
-    private var adjustmentCard: some View {
-        TaxCard {
+    private func adjustmentCard(calibration: AdjustmentCalibration?) -> some View {
+        let payerCount = plan.entries.filter {
+            !$0.kind.isDividend && $0.adjustmentApplies
+                && $0.customWithholdingPercent == nil
+        }.count
+        let overriddenPayerCount = plan.entries.filter {
+            !$0.kind.isDividend && $0.adjustmentApplies
+                && $0.customWithholdingPercent != nil
+        }.count
+        let applicationSummary = payerCount > 0
+            ? "Applied to \(payerCount) \(payerCount == 1 ? "payer" : "payers")"
+                + (overriddenPayerCount > 0 ? "; overridden on \(overriddenPayerCount)" : "")
+            : overriddenPayerCount > 0
+                ? "Overridden by custom withholding on \(overriddenPayerCount) \(overriddenPayerCount == 1 ? "payer" : "payers")"
+                : "Not applied to any payer"
+        return TaxCard {
             DisclosureGroup {
                 VStack(alignment: .leading, spacing: 12) {
                     Toggle("Use a percentage jämkning decision", isOn: Binding(
@@ -265,6 +281,14 @@ struct ContentView: View {
                                 set: { plan.adjustmentPercent = min($0, 100) }
                             )
                         )
+                        Label(
+                            applicationSummary,
+                            systemImage: payerCount == 0
+                                ? "exclamationmark.circle.fill"
+                                : "checkmark.circle.fill"
+                        )
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(payerCount == 0 ? Color.red : Color.taxAmber)
                         Text("Choose which payer sees the decision inside each income entry. A recurring salary can also supply its full-year basis for the final-tax projection.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
@@ -272,15 +296,37 @@ struct ContentView: View {
                 }
                 .padding(.top, 12)
             } label: {
-                HStack(spacing: 5) {
-                    Label("Jämkning", systemImage: "arrow.triangle.2.circlepath")
-                        .font(.headline)
-                    HelpButton { helpTopic = .adjustment }
-                    Spacer()
-                    if let percent = plan.adjustmentPercent {
-                        Text("\(percent)%")
-                            .font(.caption.bold())
-                            .foregroundStyle(Color.taxAmber)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 5) {
+                        Label("Jämkning", systemImage: "arrow.triangle.2.circlepath")
+                            .font(.headline)
+                        HelpButton { helpTopic = .adjustment }
+                        Spacer()
+                        if let percent = plan.adjustmentPercent {
+                            Text(
+                                payerCount > 0
+                                    ? "\(percent)% · \(payerCount) \(payerCount == 1 ? "payer" : "payers")"
+                                        + (overriddenPayerCount > 0 ? " + \(overriddenPayerCount) overridden" : "")
+                                    : overriddenPayerCount > 0
+                                        ? "\(percent)% · overridden"
+                                        : "\(percent)% · no payer"
+                            )
+                                .font(.caption.bold())
+                                .foregroundStyle(Color.taxAmber)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.taxAmber.opacity(0.12), in: Capsule())
+                        }
+                    }
+                    if let calibration {
+                        HStack(spacing: 5) {
+                            Label("Full-year calibration", systemImage: "calendar.badge.clock")
+                            Spacer(minLength: 8)
+                            Text("Implied adjustment \(formatSignedSEK(-calibration.impliedTaxAdjustment))")
+                                .monospacedDigit()
+                        }
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.taxAmber)
                     }
                 }
                 .foregroundStyle(.primary)
@@ -410,6 +456,10 @@ struct ContentView: View {
                             .font(.subheadline.bold())
                             .frame(maxWidth: .infinity, alignment: .leading)
                         ValueRows(rows: calibrationRows(calibration))
+                        Text(impliedAdjustmentExplanation(calibration))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     if calculation.dividendIncome > 0 {
                         Divider().padding(.vertical, 4)
@@ -516,7 +566,7 @@ struct ContentView: View {
             ValueRow("Full-year basis", formatSEK(value.basisIncome)),
             ValueRow("Formula tax at basis", formatSEK(value.formulaTaxAtBasis)),
             ValueRow("Assumed tax at \(value.percent)%", formatSEK(value.assumedTaxAtBasis)),
-            ValueRow("Implied formula adjustment", formatSignedSEK(-value.impliedTaxAdjustment)),
+            ValueRow("Implied adjustment", formatSignedSEK(-value.impliedTaxAdjustment)),
             ValueRow("Projected salary/pension tax", formatSEK(value.projectedOrdinaryTax), isTotal: true)
         ]
     }
@@ -525,6 +575,7 @@ struct ContentView: View {
 private struct IncomeEntryRow: View {
     let entry: IncomeEntry
     let withholding: EntryWithholding?
+    let adjustmentPercent: UInt32?
 
     var body: some View {
         HStack(spacing: 12) {
@@ -544,6 +595,16 @@ private struct IncomeEntryRow: View {
                     Text("Withheld \(formatSEK(withholding.withheld))")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(Color.taxBlue)
+                }
+                if let adjustmentStatusText {
+                    Label(adjustmentStatusText, systemImage: adjustmentIsApplied
+                        ? "checkmark.circle.fill"
+                        : "exclamationmark.circle.fill")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(Color.taxAmber)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(Color.taxAmber.opacity(0.12), in: Capsule())
                 }
                 if entry.vacationCompensationAmount > 0 {
                     Text("Includes vacation pay \(formatSEK(entry.vacationCompensationAmount))")
@@ -577,6 +638,19 @@ private struct IncomeEntryRow: View {
 
     private var iconColor: Color {
         entry.kind.isDividend ? .taxAmber : entry.kind.isPension ? .taxGreen : .taxBlue
+    }
+
+    private var adjustmentIsApplied: Bool {
+        guard let withholding else { return false }
+        if case .adjustmentPercent = withholding.rule { return true }
+        return false
+    }
+
+    private var adjustmentStatusText: String? {
+        guard let percent = adjustmentPercent, entry.adjustmentApplies else { return nil }
+        if adjustmentIsApplied { return "Jämkning \(percent)% applied" }
+        if let withholding { return "Jämkning overridden by \(withholding.rule.description)" }
+        return "Jämkning \(percent)% selected"
     }
 }
 
@@ -1092,6 +1166,7 @@ private final class KeyboardDismissUIView: UIView, UIGestureRecognizerDelegate {
 
 private struct CalculationTraceView: View {
     let plan: IncomePlan
+    let table: UInt8
     let calculation: PlanCalculation
     @Environment(\.dismiss) private var dismiss
 
@@ -1116,6 +1191,14 @@ private struct CalculationTraceView: View {
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
+                                if entry.fullYearAdjustmentBasisAmount > 0 {
+                                    Label(
+                                        "Full-year jämkning basis: \(formatSEK(entry.fullYearAdjustmentBasisAmount))",
+                                        systemImage: "calendar.badge.clock"
+                                    )
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(Color.taxAmber)
+                                }
                             }
                         }
                         ValueRows(rows: [ValueRow("Total", formatSEK(calculation.annualIncome), isTotal: true)])
@@ -1124,16 +1207,7 @@ private struct CalculationTraceView: View {
                         let withholding = calculation.withholding
                         ForEach(withholding.entries, id: \.entryID) { row in
                             if let entry = plan.entries.first(where: { $0.id == row.entryID }) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    LabeledContent(
-                                        entry.description.isEmpty ? entry.kind.shortTitle : entry.description,
-                                        value: formatSEK(row.withheld)
-                                    )
-                                    Text(row.rule.description)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                .padding(.vertical, 6)
+                                WithholdingTraceRow(entry: entry, row: row, table: table)
                             }
                         }
                         ValueRows(rows: [ValueRow("Total withheld", formatSEK(withholding.total), isTotal: true)])
@@ -1145,16 +1219,88 @@ private struct CalculationTraceView: View {
                         ValueRows(rows: [ValueRow("Formula tax", formatSEK(calculation.annualTax.total), isTotal: true)])
                     }
                     TraceStep(number: 4, title: "Final-tax projection") {
+                        if let calibration = calculation.adjustmentCalibration {
+                            Label(
+                                "Full-year jämkning calibration · \(calibration.percent)%",
+                                systemImage: "arrow.triangle.2.circlepath"
+                            )
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Color.taxAmber)
+                            Text("The selected full-year salary projection calibrates the formula tax applied to the actual payment-period income.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            ForEach(plan.entries.filter { $0.fullYearAdjustmentBasisAmount > 0 }) { entry in
+                                LabeledContent(
+                                    "Basis from \(entry.description.isEmpty ? entry.kind.shortTitle : entry.description)",
+                                    value: formatSEK(entry.fullYearAdjustmentBasisAmount)
+                                )
+                                .font(.caption)
+                            }
+                            ValueRows(rows: [
+                                ValueRow("Full-year basis", formatSEK(calibration.basisIncome)),
+                                ValueRow("Formula tax at basis", formatSEK(calibration.formulaTaxAtBasis)),
+                                ValueRow(
+                                    "Assumed tax at \(calibration.percent)%",
+                                    formatSEK(calibration.assumedTaxAtBasis)
+                                ),
+                                ValueRow(
+                                    "Implied adjustment",
+                                    formatSignedSEK(-calibration.impliedTaxAdjustment)
+                                ),
+                                ValueRow("Actual-period formula tax", formatSEK(calculation.annualTax.total)),
+                                ValueRow(
+                                    "Projected salary and pension tax",
+                                    formatSEK(calculation.ordinaryFinalTax),
+                                    isTotal: true
+                                )
+                            ])
+                            Text(impliedAdjustmentExplanation(calibration))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ValueRows(rows: [
+                                ValueRow("Salary and pension tax", formatSEK(calculation.ordinaryFinalTax))
+                            ])
+                        }
                         ValueRows(rows: [
-                            ValueRow("Salary and pension tax", formatSEK(calculation.ordinaryFinalTax)),
                             ValueRow("Dividend tax", formatSEK(calculation.dividendTax)),
                             ValueRow("Total final tax", formatSEK(calculation.totalTax), isTotal: true)
                         ])
                     }
                     TraceStep(number: 5, title: "Expected balance") {
-                        Text("Final tax minus preliminary withholding")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                        if let calibration = calculation.adjustmentCalibration {
+                            let formulaChange = Int64(calculation.annualTax.total)
+                                - Int64(calibration.formulaTaxAtBasis)
+                            let withholdingChange = Int64(calculation.withheldTax)
+                                - Int64(calibration.assumedTaxAtBasis)
+                            let ordinaryBalance = formulaChange - withholdingChange
+                            Text("The projected income is treated as the zero-balance anchor. The expected balance is how much faster annual formula tax changes than withholding under the original jämkning.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            ValueRows(rows: [
+                                ValueRow(
+                                    "Formula-tax change from projection",
+                                    formatSignedSEK(formulaChange)
+                                ),
+                                ValueRow(
+                                    "Withholding change from projection",
+                                    formatSignedSEK(withholdingChange)
+                                ),
+                                ValueRow(
+                                    "Formula change minus withholding change",
+                                    formatSignedSEK(ordinaryBalance)
+                                )
+                            ])
+                            if calculation.dividendTax > 0 {
+                                ValueRows(rows: [
+                                    ValueRow("Dividend tax", formatSEK(calculation.dividendTax))
+                                ])
+                            }
+                        } else {
+                            Text("Final tax minus preliminary withholding")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
                         ValueRows(rows: [ValueRow("Expected balance", taxBalanceValue(calculation.taxBalance), isTotal: true)])
                     }
                 }
@@ -1170,6 +1316,110 @@ private struct CalculationTraceView: View {
                 }
             }
         }
+    }
+}
+
+private struct WithholdingTraceRow: View {
+    let entry: IncomeEntry
+    let row: EntryWithholding
+    let table: UInt8
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            LabeledContent(title, value: formatSEK(row.withheld))
+                .fontWeight(.semibold)
+            Label(ruleTitle, systemImage: ruleIcon)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(ruleColor)
+            ForEach(Array(explanationLines.enumerated()), id: \.offset) { _, line in
+                Text(line)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 7)
+    }
+
+    private var title: String {
+        entry.description.isEmpty ? entry.kind.shortTitle : entry.description
+    }
+
+    private var ruleTitle: String {
+        switch row.rule {
+        case let .table(column):
+            "Main payer · table \(table), column \(column.rawValue)"
+        case let .tableAndOneTime(column, percent):
+            "Main payer · table \(table), column \(column.rawValue) + one-time \(percent)%"
+        case let .oneTimeTable(percent):
+            "Main payer · one-time table \(percent)%"
+        case .secondary30:
+            "Secondary payer · 30%"
+        case let .adjustmentPercent(percent):
+            "\(entry.payerRole.rawValue) · jämkning decision \(percent)%"
+        case let .customPercent(percent):
+            "\(entry.payerRole.rawValue) · custom withholding \(percent)%"
+        case .none:
+            "No preliminary withholding"
+        }
+    }
+
+    private var ruleIcon: String {
+        switch row.rule {
+        case .adjustmentPercent: "arrow.triangle.2.circlepath"
+        case .customPercent: "slider.horizontal.3"
+        case .secondary30: "building.2"
+        case .none: "minus.circle"
+        default: "tablecells"
+        }
+    }
+
+    private var ruleColor: Color {
+        if case .adjustmentPercent = row.rule { return .taxAmber }
+        return .taxBlue
+    }
+
+    private var explanationLines: [String] {
+        switch row.rule {
+        case let .adjustmentPercent(percent), let .customPercent(percent):
+            return [percentageCalculation(gross: row.gross, percent: percent)]
+        case .secondary30:
+            return [percentageCalculation(gross: row.gross, percent: 30)]
+        case let .oneTimeTable(percent):
+            return [
+                "Rate selected from total annual work income.",
+                percentageCalculation(gross: row.gross, percent: percent)
+            ]
+        case let .table(column):
+            return [regularTableExplanation(column: column, withheld: row.withheld)]
+        case let .tableAndOneTime(column, percent):
+            let vacation = entry.vacationCompensationAmount
+            let vacationWithheld = calculatedPercentage(vacation, percent)
+            let regularWithheld = row.withheld.saturatingSubtract(vacationWithheld)
+            return [
+                regularTableExplanation(column: column, withheld: regularWithheld),
+                "Vacation pay: \(formatSEK(vacation)) × \(percent)% = \(formatSEK(vacationWithheld))",
+                "Combined withholding: \(formatSEK(regularWithheld)) + \(formatSEK(vacationWithheld)) = \(formatSEK(row.withheld))"
+            ]
+        case .none:
+            return [entry.kind.isDividend
+                ? "Own-company dividends are assumed to have no payer withholding."
+                : "No withholding rule applies to this income."]
+        }
+    }
+
+    private func percentageCalculation(gross: UInt32, percent: UInt32) -> String {
+        "\(formatSEK(gross)) × \(percent)% = \(formatSEK(row.withheld))"
+    }
+
+    private func calculatedPercentage(_ amount: UInt32, _ percent: UInt32) -> UInt32 {
+        UInt32(UInt64(amount) * UInt64(percent) / 100)
+    }
+
+    private func regularTableExplanation(column: TaxColumn, withheld: UInt32) -> String {
+        if entry.kind.isMonthly {
+            return "Each active month is looked up in table \(table), column \(column.rawValue); deductions total \(formatSEK(withheld))."
+        }
+        return "Annual income ÷ 12 is looked up in table \(table), column \(column.rawValue), then annualized to \(formatSEK(withheld))."
     }
 }
 
@@ -1666,6 +1916,9 @@ private func formatSignedSEK(_ value: Int64) -> String {
     if value > 0 { return "+\(formatSEK(UInt32(value)))" }
     if value < 0 { return "−\(formatSEK(UInt32(-value)))" }
     return formatSEK(0)
+}
+private func impliedAdjustmentExplanation(_ calibration: AdjustmentCalibration) -> String {
+    "Assumed tax \(formatSEK(calibration.assumedTaxAtBasis)) − formula tax \(formatSEK(calibration.formulaTaxAtBasis)) = \(formatSignedSEK(-calibration.impliedTaxAdjustment)) implied adjustment."
 }
 private func deductionText(_ deduction: TaxDeduction) -> String {
     deduction.kind == .amount

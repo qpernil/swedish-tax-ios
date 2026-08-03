@@ -16,6 +16,20 @@ final class TaxCalculatorTests: XCTestCase {
     ]
     private let taxableIncomeBreakpoints: [UInt32] = [40_000, 118_400, 240_000, 643_200]
 
+    #if canImport(SwedishTax)
+    func testBasisPointPercentagesUseExactTextConversion() {
+        XCTAssertEqual(formatBasisPointsPercentage(0), "0")
+        XCTAssertEqual(formatBasisPointsPercentage(570), "5.7")
+        XCTAssertEqual(formatBasisPointsPercentage(576), "5.76")
+        XCTAssertEqual(parseBasisPointsPercentage(""), 0)
+        XCTAssertEqual(parseBasisPointsPercentage("5.76"), 576)
+        XCTAssertEqual(parseBasisPointsPercentage(".5"), 50)
+        XCTAssertEqual(parseBasisPointsPercentage("5."), 500)
+        XCTAssertNil(parseBasisPointsPercentage("5.123"))
+        XCTAssertNil(parseBasisPointsPercentage("42949673"))
+    }
+    #endif
+
     private func threeEntryPlan(
         targetKind: IncomeKind,
         targetIndex: Int
@@ -135,6 +149,7 @@ final class TaxCalculatorTests: XCTestCase {
         plan.adjustmentPercent = 33
         plan.entries[0].end = Date2026(month: 10, day: 18)
         plan.entries[0].adjustmentApplies = true
+        plan.entries[0].additionalWithholdingPerPayment = 1_250
         plan.entries[0].vacationCompensation = VacationCompensation(
             annualEntitlementDays: 30,
             start: plan.entries[0].start,
@@ -294,6 +309,30 @@ final class TaxCalculatorTests: XCTestCase {
                 total: 359_353
             )
         )
+    }
+
+    func testStateTaxUsesWideArithmeticForHighIncomes() throws {
+        let annual = try XCTUnwrap(
+            TaxCalculator.calculateAnnualTax(
+                table: 34,
+                column: .column1,
+                grossYearlyIncome: 300_000_000
+            )
+        )
+
+        XCTAssertEqual(annual.taxableIncome, 299_982_600)
+        XCTAssertEqual(annual.stateIncomeTax, 59_867_920)
+    }
+
+    func testVacationCompensationSaturatesAtNumericLimits() {
+        var vacation = VacationCompensation(
+            annualEntitlementDays: UInt32.max,
+            start: Date2026(month: 1, day: 1),
+            end: Date2026(month: 12, day: 31)
+        )
+        vacation.payoutDays = UInt32.max
+
+        XCTAssertEqual(vacation.amount(monthlySalary: UInt32.max), UInt32.max)
     }
 
     func testAnnualizedFormulaMatchesEveryMonthlyAmountEntry() throws {
@@ -818,7 +857,7 @@ final class TaxCalculatorTests: XCTestCase {
         let pensionIndex = try XCTUnwrap(plan.entries.firstIndex { $0.id == pensionID })
         plan.entries[pensionIndex].amount = 27_500
         plan.entries[pensionIndex].start = Date2026(month: 8, day: 1)
-        plan.entries[pensionIndex].payerRole = .secondary
+        plan.entries[pensionIndex].setPayerRole(.secondary, adjustmentAvailable: true)
 
         let totals = plan.totals
         XCTAssertEqual(totals.workIncome, 1_378_883)
@@ -914,7 +953,7 @@ final class TaxCalculatorTests: XCTestCase {
         XCTAssertNil(try PlanCalculation(table: 32, ageGroup: .under66, plan: plan))
     }
 
-    func testWithholdingPrecedenceMatchesRustGUI() throws {
+    func testWithholdingRulesAndAdditionalAmountCompose() throws {
         var plan = IncomePlan(annualSalary: 700_000)
         let pensionID = plan.addEntry(kind: .annualOccupationalPension)
         let index = try XCTUnwrap(plan.entries.firstIndex { $0.id == pensionID })
@@ -937,13 +976,214 @@ final class TaxCalculatorTests: XCTestCase {
         XCTAssertEqual(row.withheld, 38_000)
         XCTAssertEqual(row.rule, .adjustmentPercent(38))
 
-        plan.entries[index].customWithholdingPercent = 42
+        plan.entries[index].additionalWithholdingPerPayment = 500
         row = try XCTUnwrap(
             try plan.estimatedWithholding(table: 32, ageGroup: .under66)
                 .entries.first { $0.entryID == pensionID }
         )
-        XCTAssertEqual(row.withheld, 42_000)
-        XCTAssertEqual(row.rule, .customPercent(42))
+        XCTAssertEqual(row.withheld, 44_000)
+        XCTAssertEqual(row.additionalWithheld, 6_000)
+        XCTAssertEqual(row.rule, .adjustmentPercent(38))
+    }
+
+    func testAdditionalWithholdingUsesPaymentCountAndCannotExceedGross() throws {
+        var annualPlan = IncomePlan(annualSalary: 600_000)
+        let annualBaseline = try XCTUnwrap(
+            try annualPlan.estimatedWithholding(table: 32, ageGroup: .under66).entries.first
+        )
+        annualPlan.entries[0].additionalWithholdingPerPayment = 1_000
+        let annualWithExtra = try XCTUnwrap(
+            try annualPlan.estimatedWithholding(table: 32, ageGroup: .under66).entries.first
+        )
+        XCTAssertEqual(annualPlan.entries[0].withholdingPaymentCount, 12)
+        XCTAssertEqual(annualWithExtra.additionalWithheld, 12_000)
+        XCTAssertEqual(annualWithExtra.withheld, annualBaseline.withheld + 12_000)
+
+        var periodPlan = IncomePlan(monthlySalary: 40_000)
+        periodPlan.entries[0].start = Date2026(month: 3, day: 15)
+        periodPlan.entries[0].end = Date2026(month: 5, day: 10)
+        let periodBaseline = try XCTUnwrap(
+            try periodPlan.estimatedWithholding(table: 32, ageGroup: .under66).entries.first
+        )
+        periodPlan.entries[0].additionalWithholdingPerPayment = 750
+        let periodWithExtra = try XCTUnwrap(
+            try periodPlan.estimatedWithholding(table: 32, ageGroup: .under66).entries.first
+        )
+        XCTAssertEqual(periodPlan.entries[0].withholdingPaymentCount, 3)
+        XCTAssertEqual(periodWithExtra.additionalWithheld, 2_250)
+        XCTAssertEqual(periodWithExtra.withheld, periodBaseline.withheld + 2_250)
+
+        var cappedPlan = IncomePlan(annualSalary: 12_000)
+        let cappedBaseline = try XCTUnwrap(
+            try cappedPlan.estimatedWithholding(table: 32, ageGroup: .under66).entries.first
+        )
+        cappedPlan.entries[0].additionalWithholdingPerPayment = 10_000
+        let capped = try XCTUnwrap(
+            try cappedPlan.estimatedWithholding(table: 32, ageGroup: .under66).entries.first
+        )
+        XCTAssertEqual(capped.withheld, capped.gross)
+        XCTAssertEqual(
+            capped.additionalWithheld,
+            capped.gross.saturatingSubtract(cappedBaseline.withheld)
+        )
+    }
+
+    func testActualWithholdingOverridesEveryIncomeKind() throws {
+        var plan = IncomePlan(annualSalary: 700_000)
+        for (index, kind) in IncomeKind.allCases.enumerated() {
+            let entryIndex: Int
+            if index == 0 {
+                plan.entries[0].kind = kind
+                entryIndex = 0
+            } else {
+                let id = plan.addEntry(kind: kind)
+                entryIndex = try XCTUnwrap(plan.entries.firstIndex { $0.id == id })
+            }
+            plan.entries[entryIndex].amount = UInt32(100_000 + index)
+            plan.entries[entryIndex].actualWithholding = UInt32(10_000 + index)
+            plan.entries[entryIndex].additionalWithholdingPerPayment = 99
+            plan.entries[entryIndex].adjustmentApplies = true
+            plan.entries[entryIndex].payerRole = .secondary
+        }
+        plan.adjustmentPercent = 88
+
+        let withholding = try plan.estimatedWithholding(table: 32, ageGroup: .under66)
+
+        XCTAssertEqual(withholding.entries.count, IncomeKind.allCases.count)
+        for (index, row) in withholding.entries.enumerated() {
+            XCTAssertEqual(row.withheld, UInt32(10_000 + index))
+            XCTAssertEqual(row.regularWithheld, row.withheld)
+            XCTAssertEqual(row.supplementalWithheld, 0)
+            XCTAssertEqual(row.additionalWithheld, 0)
+            XCTAssertEqual(row.rule, .actualAmount)
+        }
+    }
+
+    func testPreliminary2027DividendAllowanceMatchesRust() throws {
+        var plan = IncomePlan(monthlySalary: 50_000)
+        plan.entries[0].ownCompanySourced = true
+
+        let baseline = try plan.dividendAllowance2027()
+        XCTAssertEqual(baseline.ownerCashSalary, 600_000)
+        XCTAssertEqual(baseline.companyCashPayroll, 600_000)
+        XCTAssertEqual(baseline.total, 333_600)
+
+        plan.entries[0].kind = .annualSalary
+        plan.entries[0].amount = 800_000
+        let wageBased = try plan.dividendAllowance2027()
+        XCTAssertEqual(wageBased.jointWageBasisAfterDeduction, 132_800)
+        XCTAssertEqual(wageBased.wageAllowance, 66_400)
+        XCTAssertEqual(wageBased.total, 400_000)
+    }
+
+    func testPreliminary2027OwnershipAllocationFollowsSkatteverketWorkedExamples() throws {
+        // Skatteverket's Gunnar/Rita, Ismail, and Tove examples for income year 2026:
+        // https://www.skatteverket.se/foretag/drivaforetag/foretagsformer/famansforetag/andradereglerfordelagareifamansforetaginforinkomstdeklarationen2027.4.4a54dc8b19aa6175a152359.html
+        // The app projects income year 2027, so the same published allocation formula
+        // uses the official 2026 income-base amount: 4 × 83,400 = 333,600 SEK.
+        var inputs = DividendAllowanceInputs2027()
+        inputs.ownershipBasisPoints = 5_000
+        XCTAssertEqual(try inputs.calculate(ownerCashSalary2026: 0).basicAmount, 166_800)
+
+        inputs.ownershipBasisPoints = 2_500
+        inputs.otherQualifiedOwnershipBasisPoints = 3_300
+        XCTAssertEqual(try inputs.calculate(ownerCashSalary2026: 0).basicAmount, 83_400)
+
+        inputs.otherQualifiedOwnershipBasisPoints = 17_500
+        XCTAssertEqual(try inputs.calculate(ownerCashSalary2026: 0).basicAmount, 41_700)
+    }
+
+    func testPreliminary2027WageAllowanceFollowsSkatteverketWorkedExamples() throws {
+        // Mirrors Skatteverket's Agnes/Birger and Amy/Gedion examples with the
+        // income-year-2027 deduction: 8 × the official 2026 IBB = 667,200 SEK.
+        var agnes = DividendAllowanceInputs2027()
+        agnes.onePersonCompany = false
+        agnes.ownershipBasisPoints = 7_000
+        agnes.companyCashPayroll2026 = 4_000_000
+        let agnesResult = try agnes.calculate(ownerCashSalary2026: 400_000)
+        XCTAssertEqual(agnesResult.jointWageBasis, 2_800_000)
+        XCTAssertEqual(agnesResult.jointWageBasisAfterDeduction, 2_132_800)
+        XCTAssertEqual(agnesResult.wageAllowance, 1_066_400)
+
+        var birger = agnes
+        birger.ownershipBasisPoints = 3_000
+        let birgerResult = try birger.calculate(ownerCashSalary2026: 300_000)
+        XCTAssertEqual(birgerResult.jointWageBasis, 1_200_000)
+        XCTAssertEqual(birgerResult.jointWageBasisAfterDeduction, 532_800)
+        XCTAssertEqual(birgerResult.wageAllowance, 266_400)
+
+        var amy = agnes
+        amy.ownershipBasisPoints = 6_000
+        amy.spouseOwnershipBasisPoints = 4_000
+        amy.highestRelatedCashSalary2026 = 300_000
+        XCTAssertEqual(try amy.calculate(ownerCashSalary2026: 500_000).wageAllowance, 999_840)
+
+        var gedion = amy
+        gedion.ownershipBasisPoints = 4_000
+        gedion.spouseOwnershipBasisPoints = 6_000
+        gedion.highestRelatedCashSalary2026 = 500_000
+        XCTAssertEqual(try gedion.calculate(ownerCashSalary2026: 300_000).wageAllowance, 666_560)
+    }
+
+    func testPreliminary2027AllowanceFollowsSkatteverketValterAndHelleExamples() throws {
+        // Valter's published total remains 1,250,000 SEK when rolled forward:
+        // the 11,200 SEK higher basic amount is offset by an 11,200 SEK lower
+        // wage allowance under the eight-IBB deduction.
+        var valter = DividendAllowanceInputs2027()
+        valter.onePersonCompany = false
+        valter.companyCashPayroll2026 = 1_000_000
+        valter.acquisitionCost = 25_000
+        valter.savedAllowance = 750_000
+        let valterResult = try valter.calculate(ownerCashSalary2026: 600_000)
+        XCTAssertEqual(valterResult.basicAmount, 333_600)
+        XCTAssertEqual(valterResult.wageAllowance, 166_400)
+        XCTAssertEqual(valterResult.acquisitionCostInterest, 0)
+        XCTAssertEqual(valterResult.total, 1_250_000)
+        XCTAssertEqual(valterResult.taxAtTwentyPercent, 250_000)
+        XCTAssertEqual(valterResult.netAfterTwentyPercentTax, 1_000_000)
+
+        // Helle's official example uses 11.55% on the acquisition-cost portion
+        // above 100,000 SEK: 150,000 × 11.55% = 17,325 SEK.
+        var helle = DividendAllowanceInputs2027()
+        helle.acquisitionCost = 250_000
+        helle.acquisitionCostInterestBasisPoints = 1_155
+        let helleResult = try helle.calculate(ownerCashSalary2026: 0)
+        XCTAssertEqual(helleResult.acquisitionCostInterestBasis, 150_000)
+        XCTAssertEqual(helleResult.acquisitionCostInterest, 17_325)
+    }
+
+    func testQualifiedDividendTaxMatchesSkatteverketParisaExample() throws {
+        // Skatteverket: 78,000 SEK within the allowance produces 15,600 SEK tax.
+        // https://www.skatteverket.se/foretag/drivaforetag/foretagsformer/famansforetag/raknautskattenpadinutdelning.4.b1014b415f3321c0de27ce.html
+        var plan = IncomePlan(annualSalary: 420_000)
+        let dividendID = plan.addEntry(kind: .ownCompanyDividend)
+        let index = try XCTUnwrap(plan.entries.firstIndex { $0.id == dividendID })
+        plan.entries[index].amount = 78_000
+
+        let calculation = try XCTUnwrap(
+            try PlanCalculation(table: 32, ageGroup: .under66, plan: plan)
+        )
+        XCTAssertEqual(calculation.dividendTax, 15_600)
+        XCTAssertEqual(plan.entries[index].amount - calculation.dividendTax, 62_400)
+    }
+
+    func testPersistedPlanWithoutNewParityFieldsStillDecodes() throws {
+        let encoded = try JSONEncoder().encode(IncomePlan(monthlySalary: 55_033))
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        object.removeValue(forKey: "dividendAllowance")
+        var entries = try XCTUnwrap(object["entries"] as? [[String: Any]])
+        entries[0].removeValue(forKey: "ownCompanySourced")
+        entries[0].removeValue(forKey: "actualWithholding")
+        object["entries"] = entries
+        let legacy = try JSONSerialization.data(withJSONObject: object)
+
+        let restored = try JSONDecoder().decode(IncomePlan.self, from: legacy)
+
+        XCTAssertFalse(restored.entries[0].ownCompanySourced)
+        XCTAssertNil(restored.entries[0].actualWithholding)
+        XCTAssertEqual(restored.dividendAllowance, DividendAllowanceInputs2027())
     }
 
     func testFullYearAdjustmentCalibrationMatchesRustGUI() throws {

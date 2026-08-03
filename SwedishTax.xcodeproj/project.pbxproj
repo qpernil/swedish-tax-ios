@@ -20,6 +20,7 @@
 		B0000000000000000000000C /* IncomePlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000000D /* IncomePlan.swift */; };
 		B0000000000000000000000D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000007 /* Assets.xcassets */; };
 		B0000000000000000000000E /* AppStateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000000E /* AppStateStore.swift */; };
+		B0000000000000000000000F /* DividendAllowance.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000000F /* DividendAllowance.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -47,6 +48,7 @@
 		A0000000000000000000000C /* IncomeBases.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IncomeBases.swift; sourceTree = "<group>"; };
 		A0000000000000000000000D /* IncomePlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IncomePlan.swift; sourceTree = "<group>"; };
 		A0000000000000000000000E /* AppStateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateStore.swift; sourceTree = "<group>"; };
+		A0000000000000000000000F /* DividendAllowance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DividendAllowance.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -106,6 +108,7 @@
 				A00000000000000000000005 /* TaxCalculator.swift */,
 				A0000000000000000000000C /* IncomeBases.swift */,
 				A0000000000000000000000D /* IncomePlan.swift */,
+				A0000000000000000000000F /* DividendAllowance.swift */,
 			);
 			path = Core;
 			sourceTree = "<group>";
@@ -254,6 +257,7 @@
 				B00000000000000000000005 /* TaxCalculator.swift in Sources */,
 				B0000000000000000000000B /* IncomeBases.swift in Sources */,
 				B0000000000000000000000C /* IncomePlan.swift in Sources */,
+				B0000000000000000000000F /* DividendAllowance.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

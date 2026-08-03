@@ -71,6 +71,8 @@ struct ContentView: View {
                         unavailableCard(for: calculationState)
                     }
 
+                    dividendAllowanceCard
+
                     Text("Preliminary estimate based on Skatteverket tables and SKV 433, edition 36.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -254,24 +256,24 @@ struct ContentView: View {
     private func adjustmentCard(calibration: AdjustmentCalibration?) -> some View {
         let payerCount = plan.entries.filter {
             !$0.kind.isDividend && $0.adjustmentApplies
-                && $0.customWithholdingPercent == nil
+                && $0.actualWithholding == nil
         }.count
         let overriddenPayerCount = plan.entries.filter {
             !$0.kind.isDividend && $0.adjustmentApplies
-                && $0.customWithholdingPercent != nil
+                && $0.actualWithholding != nil
         }.count
         let applicationSummary = payerCount > 0
             ? "Applied to \(payerCount) \(payerCount == 1 ? "payer" : "payers")"
                 + (overriddenPayerCount > 0 ? "; overridden on \(overriddenPayerCount)" : "")
             : overriddenPayerCount > 0
-                ? "Overridden by custom withholding on \(overriddenPayerCount) \(overriddenPayerCount == 1 ? "payer" : "payers")"
+                ? "Overridden by custom or actual withholding on \(overriddenPayerCount) \(overriddenPayerCount == 1 ? "payer" : "payers")"
                 : "Not applied to any payer"
         return TaxCard {
             DisclosureGroup {
                 VStack(alignment: .leading, spacing: 12) {
                     Toggle("Use a percentage jämkning decision", isOn: Binding(
                         get: { plan.adjustmentPercent != nil },
-                        set: { plan.adjustmentPercent = $0 ? 30 : nil }
+                        set: { plan.setAdjustmentEnabled($0) }
                     ))
                     if plan.adjustmentPercent != nil {
                         PercentageStepper(
@@ -295,6 +297,7 @@ struct ContentView: View {
                     }
                 }
                 .padding(.top, 12)
+                .padding(.trailing, 16)
             } label: {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 5) {
@@ -508,10 +511,113 @@ struct ContentView: View {
         }
     }
 
+    private var dividendAllowanceCard: some View {
+        TaxCard {
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 12) {
+                    Toggle(
+                        "One-person company — marked salary is total payroll",
+                        isOn: $plan.dividendAllowance.onePersonCompany
+                    )
+                    BasisPointsPercentageField(
+                        title: "Your ownership",
+                        basisPoints: $plan.dividendAllowance.ownershipBasisPoints
+                    )
+                    BasisPointsPercentageField(
+                        title: "Spouse ownership",
+                        basisPoints: $plan.dividendAllowance.spouseOwnershipBasisPoints
+                    )
+                    BasisPointsPercentageField(
+                        title: "Your ownership in other qualified companies",
+                        basisPoints: $plan.dividendAllowance.otherQualifiedOwnershipBasisPoints,
+                        maximumBasisPoints: 1_000_000
+                    )
+                    if !plan.dividendAllowance.onePersonCompany {
+                        UIntField(
+                            title: "Company/group payroll in 2026",
+                            value: $plan.dividendAllowance.companyCashPayroll2026,
+                            suffix: "SEK"
+                        )
+                        UIntField(
+                            title: "Highest related person's salary",
+                            value: $plan.dividendAllowance.highestRelatedCashSalary2026,
+                            suffix: "SEK"
+                        )
+                    }
+                    UIntField(
+                        title: "Acquisition cost",
+                        value: $plan.dividendAllowance.acquisitionCost,
+                        suffix: "SEK"
+                    )
+                    UIntField(
+                        title: "Saved allowance",
+                        value: $plan.dividendAllowance.savedAllowance,
+                        suffix: "SEK"
+                    )
+
+                    Divider()
+                    dividendAllowanceResult
+                    Text("The actual dividend also requires sufficient free equity, a prudence assessment, and a shareholder decision.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.top, 10)
+                .padding(.trailing, 16)
+            } label: {
+                Label("Preliminary 2027 dividend allowance", systemImage: "building.2.crop.circle")
+                    .font(.headline)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var dividendAllowanceResult: some View {
+        let result: Result<DividendAllowance2027, Error> = Result {
+            try plan.dividendAllowance2027()
+        }
+
+        switch result {
+        case let .success(allowance):
+            LabeledContent("Maximum dividend at 20%", value: formatSEK(allowance.total))
+                .fontWeight(.semibold)
+            LabeledContent("Basic amount", value: formatSEK(allowance.basicAmount))
+            LabeledContent("Wage-based allowance", value: formatSEK(allowance.wageAllowance))
+            LabeledContent("Personal tax if fully used", value: formatSEK(allowance.taxAtTwentyPercent))
+            LabeledContent("Net after 20% tax", value: formatSEK(allowance.netAfterTwentyPercentTax))
+                .fontWeight(.semibold)
+            Text("Marked 2026 own-company salary: \(formatSEK(allowance.ownerCashSalary)). Dividend paid in 2027 is declared on K10 in 2028.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        case let .failure(error):
+            if let issue = error as? DividendAllowanceIssue {
+                Label(dividendAllowanceIssueText(issue), systemImage: "exclamationmark.triangle.fill")
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+            } else {
+                Label("Unable to calculate the allowance.", systemImage: "exclamationmark.triangle.fill")
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+            }
+        }
+    }
+
+    private func dividendAllowanceIssueText(_ issue: DividendAllowanceIssue) -> String {
+        switch issue {
+        case .ownershipExceedsOneHundredPercent:
+            "Your ownership in this company cannot exceed 100%."
+        case .spouseOwnershipExceedsCompany:
+            "Your and your spouse's combined ownership cannot exceed 100%."
+        case .personalSalaryExceedsCompanyPayroll:
+            "Owner or related-person salary cannot exceed company/group payroll."
+        case .missingAcquisitionCostInterestRate:
+            "The exact 2027 acquisition-cost interest rate is not known until 30 November 2026."
+        }
+    }
+
     private func validationMessage(for issue: IncomePlanValidationIssue?) -> String {
         switch issue {
         case .invalidPaymentPeriod:
-            "Check that each payment period ends after it starts."
+            "Check that each payment period's last day is on or after its first day."
         case let .salaryExchangeExceedsAllowance(_, maximum):
             "Salary exchange exceeds the current maximum of \(formatSEK(maximum)). Open the entry and reduce it."
         case nil:
@@ -623,7 +729,7 @@ private struct IncomeEntryRow: View {
             VStack(alignment: .trailing, spacing: 4) {
                 Text(formatSEK(entry.totalAnnualAmount))
                     .font(.subheadline.monospacedDigit().weight(.semibold))
-                Text("/ year")
+                Text(amountPeriodText)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -658,6 +764,15 @@ private struct IncomeEntryRow: View {
         if adjustmentIsApplied { return "Jämkning \(percent)% applied" }
         if let withholding { return "Jämkning overridden by \(withholding.rule.description)" }
         return "Jämkning \(percent)% selected"
+    }
+
+    private var amountPeriodText: String {
+        switch entry.kind {
+        case .oneTimeSalary, .ownCompanyDividend:
+            "One-time total"
+        default:
+            "/ year"
+        }
     }
 }
 
@@ -738,9 +853,15 @@ private struct IncomeEntryEditor: View {
                     ForEach(IncomeKind.allCases) { Text($0.title).tag($0) }
                 }
                 .pickerStyle(.menu)
+                .lineLimit(2, reservesSpace: true)
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 2)
                 .onChange(of: entry.wrappedValue.kind) { old, _ in
-                    entry.wrappedValue.prepareForKindChange(from: old)
+                    entry.wrappedValue.prepareForKindChange(
+                        from: old,
+                        adjustmentAvailable: plan.adjustmentPercent != nil
+                    )
                 }
             }
             Divider()
@@ -749,6 +870,16 @@ private struct IncomeEntryEditor: View {
                 value: entry.amount,
                 suffix: "SEK"
             )
+            if entry.wrappedValue.kind.isSalary {
+                Divider()
+                Toggle(
+                    "Paid by my own company or qualifying group",
+                    isOn: entry.ownCompanySourced
+                )
+                Text("Feeds the preliminary 2027 3:12 owner-salary and payroll calculation.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
             Text(entry.wrappedValue.kind.eligibility)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(Color.taxBlue)
@@ -757,15 +888,18 @@ private struct IncomeEntryEditor: View {
 
     private func periodCard(_ entry: Binding<IncomeEntry>) -> some View {
         EditorCard(title: "Payment period", systemImage: "calendar") {
-            Date2026Field(title: "From", value: entry.start)
+            Date2026Field(title: "First day", value: entry.start)
                 .onChange(of: entry.wrappedValue.start) { _, _ in
                     updateSuggestedVacationDays(entry)
                 }
             Divider()
-            Date2026Field(title: "Through", value: entry.end)
+            Date2026Field(title: "Last day", value: entry.end)
                 .onChange(of: entry.wrappedValue.end) { _, _ in
                     updateSuggestedVacationDays(entry)
                 }
+            Text("Both the first and last day are included.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
             Button("Use full year") {
                 entry.wrappedValue.start = Date2026(month: 1, day: 1)
                 entry.wrappedValue.end = Date2026(month: 12, day: 31)
@@ -773,7 +907,7 @@ private struct IncomeEntryEditor: View {
             }
             .buttonStyle(.bordered)
             if !entry.wrappedValue.isValid {
-                Label("End date must follow start date", systemImage: "exclamationmark.triangle.fill")
+                Label("Last day must be on or after first day", systemImage: "exclamationmark.triangle.fill")
                     .font(.footnote)
                     .foregroundStyle(.red)
             }
@@ -823,7 +957,7 @@ private struct IncomeEntryEditor: View {
                     .foregroundStyle(.secondary)
                 LabeledContent("Vacation compensation", value: formatSEK(entry.wrappedValue.vacationCompensationAmount))
                     .fontWeight(.semibold)
-                Toggle("Include payout in pension salary basis", isOn: Binding(
+                Toggle("Treat this payout as pensionable", isOn: Binding(
                     get: { entry.wrappedValue.vacationCompensation?.includedInPensionSalaryBasis ?? true },
                     set: { included in
                         guard var vacation = entry.wrappedValue.vacationCompensation else { return }
@@ -832,7 +966,7 @@ private struct IncomeEntryEditor: View {
                         entry.wrappedValue.vacationCompensation = vacation
                     }
                 ))
-                Toggle("Use actual additional pension contribution", isOn: Binding(
+                Toggle("Use actual pension contribution for this vacation payout", isOn: Binding(
                     get: { entry.wrappedValue.vacationCompensation?.pensionPremiumOverride != nil },
                     set: { enabled in
                         var vacation = entry.wrappedValue.vacationCompensation!
@@ -844,7 +978,7 @@ private struct IncomeEntryEditor: View {
                 ))
                 if entry.wrappedValue.vacationCompensation?.pensionPremiumOverride != nil {
                     UIntField(
-                        title: "Actual contribution",
+                        title: "Actual pension contribution for vacation payout",
                         value: vacationOptionalBinding(entry, \.pensionPremiumOverride),
                         suffix: "SEK"
                     )
@@ -855,7 +989,7 @@ private struct IncomeEntryEditor: View {
 
     private func pensionCard(_ entry: Binding<IncomeEntry>) -> some View {
         EditorCard(title: "Employer tjänstepension", systemImage: "chart.line.uptrend.xyaxis") {
-            Toggle("Include salary in pension salary basis", isOn: entry.includedInPensionSalaryBasis)
+            Toggle("Treat this salary as pensionable", isOn: entry.includedInPensionSalaryBasis)
             Toggle("Calculate employer contribution", isOn: Binding(
                 get: { entry.wrappedValue.regularPensionPremium != nil },
                 set: { entry.wrappedValue.regularPensionPremium = $0 ? RegularPensionPremium() : nil }
@@ -868,7 +1002,7 @@ private struct IncomeEntryEditor: View {
                     ? entry.wrappedValue.amount / 12
                     : entry.wrappedValue.amount
                 LabeledContent("Monthly benchmark", value: formatSEK(RegularPensionPremium.benchmarkMonthly(monthly)))
-                Toggle("Use actual monthly contribution", isOn: Binding(
+                Toggle("Use actual monthly pension contribution", isOn: Binding(
                     get: { entry.wrappedValue.regularPensionPremium?.monthlyOverride != nil },
                     set: { enabled in
                         var premium = entry.wrappedValue.regularPensionPremium!
@@ -880,7 +1014,7 @@ private struct IncomeEntryEditor: View {
                 ))
                 if entry.wrappedValue.regularPensionPremium?.monthlyOverride != nil {
                     UIntField(
-                        title: "Actual monthly contribution",
+                        title: "Actual monthly pension contribution",
                         value: pensionOverrideBinding(entry),
                         suffix: "SEK"
                     )
@@ -902,7 +1036,7 @@ private struct IncomeEntryEditor: View {
 
     private func salaryExchangeCard(_ entry: Binding<IncomeEntry>) -> some View {
         EditorCard(title: "Salary exchange", systemImage: "arrow.left.arrow.right") {
-            Toggle("Include payment in pension salary basis", isOn: entry.includedInPensionSalaryBasis)
+            Toggle("Treat this payment as pensionable", isOn: entry.includedInPensionSalaryBasis)
             Toggle("Exchange part for tjänstepension", isOn: Binding(
                 get: { entry.wrappedValue.salaryExchange != nil },
                 set: { enabled in
@@ -915,19 +1049,21 @@ private struct IncomeEntryEditor: View {
             if entry.wrappedValue.salaryExchange != nil {
                 Toggle("Employer adds uplift", isOn: salaryExchangeBoolBinding(entry, \.employerAddsUplift, default: true))
                 if entry.wrappedValue.salaryExchange?.employerAddsUplift == true {
-                    UIntField(
+                    BasisPointsPercentageField(
                         title: "Employer uplift",
-                        value: salaryExchangeBinding(entry, \.upliftBasisPoints, default: 576),
-                        suffix: "basis points",
-                        maximum: 10_000
+                        basisPoints: salaryExchangeBinding(
+                            entry,
+                            \.upliftBasisPoints,
+                            default: SalaryExchange.defaultUpliftBasisPoints
+                        )
                     )
                 }
                 if let allowance = plan.salaryExchangeAllowance(for: entryID) {
                     ValueRows(rows: [
-                        ValueRow("Pension salary before", formatSEK(allowance.pensionSalaryBasisBefore)),
-                        ValueRow("Pension salary after", formatSEK(allowance.pensionSalaryBasisAfter)),
-                        ValueRow("35% allowance ceiling", formatSEK(allowance.ceiling)),
-                        ValueRow("Available contribution", formatSEK(allowance.availableContribution))
+                        ValueRow("Pensionable salary before exchange", formatSEK(allowance.pensionSalaryBasisBefore)),
+                        ValueRow("Pensionable salary after exchange", formatSEK(allowance.pensionSalaryBasisAfter)),
+                        ValueRow("35% contribution ceiling", formatSEK(allowance.ceiling)),
+                        ValueRow("Contribution room", formatSEK(allowance.availableContribution))
                     ])
                     UIntField(
                         title: "Salary to exchange",
@@ -940,11 +1076,11 @@ private struct IncomeEntryEditor: View {
                     }
                     .buttonStyle(.bordered)
                 }
-                LabeledContent("Employer pension contribution", value: formatSEK(entry.wrappedValue.salaryExchangePensionContribution))
+                LabeledContent("Resulting pension contribution", value: formatSEK(entry.wrappedValue.salaryExchangePensionContribution))
                     .fontWeight(.semibold)
                 LabeledContent("Taxable cash payment", value: formatSEK(entry.wrappedValue.totalAnnualAmount))
             }
-            Text("Indicative current-year main-rule estimate: employer pension contributions are limited to 35% of pension salary, capped at 592,000 SEK for 2026.")
+            Text("Indicative current-year main-rule estimate: employer pension contributions are limited to 35% of pensionable salary, capped at 592,000 SEK for 2026.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
@@ -952,52 +1088,99 @@ private struct IncomeEntryEditor: View {
 
     private func withholdingCard(_ entry: Binding<IncomeEntry>) -> some View {
         EditorCard(title: "Preliminary withholding", systemImage: "building.columns") {
+            Toggle("Use actual tax withheld", isOn: Binding(
+                get: { entry.wrappedValue.actualWithholding != nil },
+                set: { enabled in
+                    entry.wrappedValue.actualWithholding = enabled ? 0 : nil
+                    if enabled { entry.wrappedValue.additionalWithholdingPerPayment = nil }
+                }
+            ))
+            Text("Use the known SEK amount shown on the payslip. This replaces the app's table, 30%, jämkning, and additional-withholding calculation for this entry.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            if entry.wrappedValue.actualWithholding != nil {
+                UIntField(
+                    title: "Actual tax withheld",
+                    value: Binding(
+                        get: { entry.wrappedValue.actualWithholding ?? 0 },
+                        set: { entry.wrappedValue.actualWithholding = $0 }
+                    ),
+                    suffix: "SEK",
+                    maximum: 100_000_000
+                )
+            }
             if entry.wrappedValue.kind.isDividend {
-                Text("No preliminary withholding is assumed. The app adds 20% final tax for dividends within gränsbelopp.")
+                Text("Without an entered actual amount, no preliminary withholding is assumed. The app adds 20% final tax for dividends within gränsbelopp.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             } else {
-                Picker("Payer", selection: entry.payerRole) {
+                Picker("Payer", selection: Binding(
+                    get: { entry.wrappedValue.payerRole },
+                    set: {
+                        entry.wrappedValue.setPayerRole(
+                            $0,
+                            adjustmentAvailable: plan.adjustmentPercent != nil
+                        )
+                    }
+                )) {
                     Text("Main payer — table").tag(PayerRole.main)
                     Text("Secondary payer — 30%").tag(PayerRole.secondary)
                 }
                 .pickerStyle(.menu)
                 if plan.adjustmentPercent != nil {
-                    Toggle("Jämkning shown to this payer", isOn: entry.adjustmentApplies)
+                    Toggle("Use jämkning", isOn: entry.adjustmentApplies)
                 }
-                Toggle("Use custom withholding", isOn: Binding(
-                    get: { entry.wrappedValue.customWithholdingPercent != nil },
-                    set: { entry.wrappedValue.customWithholdingPercent = $0 ? 30 : nil }
+                Toggle("Add voluntary extra withholding", isOn: Binding(
+                    get: { entry.wrappedValue.additionalWithholdingPerPayment != nil },
+                    set: { enabled in
+                        entry.wrappedValue.additionalWithholdingPerPayment = enabled ? 1_000 : nil
+                        if enabled { entry.wrappedValue.actualWithholding = nil }
+                    }
                 ))
-                if entry.wrappedValue.customWithholdingPercent != nil {
+                Text("Enter the extra SEK you asked the payer to deduct from each payment. It is added on top of table tax, 30%, or jämkning to reduce expected residual tax.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                if entry.wrappedValue.additionalWithholdingPerPayment != nil {
                     UIntField(
-                        title: "Custom withholding",
+                        title: entry.wrappedValue.withholdingPaymentCount > 1
+                            ? "Extra per payment"
+                            : "Extra withholding",
                         value: Binding(
-                            get: { entry.wrappedValue.customWithholdingPercent ?? 30 },
-                            set: { entry.wrappedValue.customWithholdingPercent = min($0, 100) }
+                            get: { entry.wrappedValue.additionalWithholdingPerPayment ?? 1_000 },
+                            set: { entry.wrappedValue.additionalWithholdingPerPayment = $0 }
                         ),
-                        suffix: "%",
-                        maximum: 100
+                        suffix: "SEK"
                     )
+                    if entry.wrappedValue.withholdingPaymentCount > 1 {
+                        LabeledContent(
+                            "Planned extra for period",
+                            value: formatSEK(entry.wrappedValue.requestedAdditionalWithholding)
+                        )
+                        .font(.footnote.weight(.semibold))
+                    }
                 }
-                switch withholdingResult {
-                case let .success(withholding?):
-                    Divider()
-                    LabeledContent("Calculated withholding", value: formatSEK(withholding.withheld))
-                        .fontWeight(.semibold)
-                    Text(withholding.rule.description)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                case .success(nil):
-                    EmptyView()
-                case let .failure(error):
-                    Divider()
-                    Label("Tax data unavailable", systemImage: "doc.badge.exclamationmark")
-                        .font(.subheadline.weight(.semibold))
-                    Text(error.localizedDescription)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
+            }
+            switch withholdingResult {
+            case let .success(withholding?):
+                Divider()
+                LabeledContent("Calculated withholding", value: formatSEK(withholding.withheld))
+                    .fontWeight(.semibold)
+                Text(
+                    withholding.additionalWithheld > 0
+                        ? "\(withholding.rule.description) + \(formatSEK(withholding.additionalWithheld)) additional"
+                        : withholding.rule.description
+                )
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            case .success(nil):
+                EmptyView()
+            case let .failure(error):
+                Divider()
+                Label("Tax data unavailable", systemImage: "doc.badge.exclamationmark")
+                    .font(.subheadline.weight(.semibold))
+                Text(error.localizedDescription)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -1020,7 +1203,7 @@ private struct IncomeEntryEditor: View {
         }
         rows.append(contentsOf: [
             ValueRow("PGI / SGI", entry.kind.eligibility),
-            ValueRow("Pension salary basis", formatSEK(entry.pensionSalaryBasisAmount)),
+            ValueRow("Pensionable salary", formatSEK(entry.pensionSalaryBasisAmount)),
             ValueRow("Employer pension", formatSEK(
                 entry.regularPensionPremiumAmount
                     .saturatingAdd(entry.vacationPensionPremiumAmount)
@@ -1376,28 +1559,32 @@ private struct WithholdingTraceRow: View {
     }
 
     private var ruleTitle: String {
+        let base: String
         switch row.rule {
+        case .actualAmount:
+            base = "Entered actual withholding"
         case let .table(column):
-            "Main payer · table \(table), column \(column.rawValue)"
+            base = "Main payer · table \(table), column \(column.rawValue)"
         case let .tableAndOneTime(column, percent):
-            "Main payer · table \(table), column \(column.rawValue) + one-time \(percent)%"
+            base = "Main payer · table \(table), column \(column.rawValue) + one-time \(percent)%"
         case let .oneTimeTable(percent):
-            "Main payer · one-time table \(percent)%"
+            base = "Main payer · one-time table \(percent)%"
         case .secondary30:
-            "Secondary payer · 30%"
+            base = "Secondary payer · 30%"
         case let .adjustmentPercent(percent):
-            "\(entry.payerRole.rawValue) · jämkning decision \(percent)%"
-        case let .customPercent(percent):
-            "\(entry.payerRole.rawValue) · custom withholding \(percent)%"
+            base = "\(entry.payerRole.rawValue) · jämkning decision \(percent)%"
         case .none:
-            "No preliminary withholding"
+            base = "No preliminary withholding"
         }
+        return row.additionalWithheld > 0
+            ? "\(base) + \(formatSEK(row.additionalWithheld)) extra"
+            : base
     }
 
     private var ruleIcon: String {
         switch row.rule {
+        case .actualAmount: "checkmark.circle"
         case .adjustmentPercent: "arrow.triangle.2.circlepath"
-        case .customPercent: "slider.horizontal.3"
         case .secondary30: "building.2"
         case .none: "minus.circle"
         default: "tablecells"
@@ -1410,40 +1597,67 @@ private struct WithholdingTraceRow: View {
     }
 
     private var explanationLines: [String] {
+        let baseWithheld = row.withheld.saturatingSubtract(row.additionalWithheld)
+        var lines: [String]
         switch row.rule {
-        case let .adjustmentPercent(percent), let .customPercent(percent):
-            return [percentageCalculation(gross: row.gross, percent: percent)]
+        case .actualAmount:
+            lines = ["Actual tax withheld entered for this income row."]
+        case let .adjustmentPercent(percent):
+            lines = [percentageCalculation(
+                gross: row.gross,
+                percent: percent,
+                withheld: baseWithheld
+            )]
         case .secondary30:
-            return [percentageCalculation(gross: row.gross, percent: 30)]
+            lines = [percentageCalculation(
+                gross: row.gross,
+                percent: 30,
+                withheld: baseWithheld
+            )]
         case let .oneTimeTable(percent):
-            return [
+            lines = [
                 "Rate selected from total annual work income.",
-                percentageCalculation(gross: row.gross, percent: percent)
+                percentageCalculation(gross: row.gross, percent: percent, withheld: baseWithheld)
             ]
         case let .table(column):
-            return [regularTableExplanation(column: column, withheld: row.withheld)]
+            lines = [regularTableExplanation(column: column, withheld: row.regularWithheld)]
         case let .tableAndOneTime(column, percent):
             let vacation = entry.vacationCompensationAmount
-            let vacationWithheld = calculatedPercentage(vacation, percent)
-            let regularWithheld = row.withheld.saturatingSubtract(vacationWithheld)
-            return [
-                regularTableExplanation(column: column, withheld: regularWithheld),
-                "Vacation pay: \(formatSEK(vacation)) × \(percent)% = \(formatSEK(vacationWithheld))",
-                "Combined withholding: \(formatSEK(regularWithheld)) + \(formatSEK(vacationWithheld)) = \(formatSEK(row.withheld))"
+            lines = [
+                regularTableExplanation(column: column, withheld: row.regularWithheld),
+                "Vacation pay: \(formatSEK(vacation)) × \(percent)% = \(formatSEK(row.supplementalWithheld))",
+                "Combined withholding: \(formatSEK(row.regularWithheld)) + \(formatSEK(row.supplementalWithheld)) = \(formatSEK(baseWithheld))"
             ]
         case .none:
-            return [entry.kind.isDividend
+            lines = [entry.kind.isDividend
                 ? "Own-company dividends are assumed to have no payer withholding."
                 : "No withholding rule applies to this income."]
         }
+        guard row.additionalWithheld > 0 else { return lines }
+
+        if row.additionalWithheld < entry.requestedAdditionalWithholding {
+            lines.append(
+                "Additional withholding is limited to \(formatSEK(row.additionalWithheld)) so total withholding does not exceed gross income."
+            )
+        } else if entry.withholdingPaymentCount > 1 {
+            lines.append(
+                "Additional withholding: \(formatSEK(entry.additionalWithholdingPerPayment ?? 0)) × \(entry.withholdingPaymentCount) payments = \(formatSEK(row.additionalWithheld))"
+            )
+        } else {
+            lines.append("Additional withholding: \(formatSEK(row.additionalWithheld))")
+        }
+        lines.append(
+            "Total withholding: \(formatSEK(baseWithheld)) + \(formatSEK(row.additionalWithheld)) = \(formatSEK(row.withheld))"
+        )
+        return lines
     }
 
-    private func percentageCalculation(gross: UInt32, percent: UInt32) -> String {
-        "\(formatSEK(gross)) × \(percent)% = \(formatSEK(row.withheld))"
-    }
-
-    private func calculatedPercentage(_ amount: UInt32, _ percent: UInt32) -> UInt32 {
-        UInt32(UInt64(amount) * UInt64(percent) / 100)
+    private func percentageCalculation(
+        gross: UInt32,
+        percent: UInt32,
+        withheld: UInt32
+    ) -> String {
+        "\(formatSEK(gross)) × \(percent)% = \(formatSEK(withheld))"
     }
 
     private func regularTableExplanation(column: TaxColumn, withheld: UInt32) -> String {
@@ -1492,24 +1706,40 @@ private struct Date2026Field: View {
     }
 
     var body: some View {
-        HStack {
-            Text(title)
-            Spacer()
-            Picker("Month", selection: $value.month) {
-                ForEach(UInt8(1)...UInt8(12), id: \.self) { month in
-                    Text(monthName(month)).tag(month)
+        LabeledContent(title) {
+            HStack(spacing: 4) {
+                Picker("Month", selection: $value.month) {
+                    ForEach(UInt8(1)...UInt8(12), id: \.self) { month in
+                        Text(monthName(month)).tag(month)
+                    }
                 }
-            }
-            .pickerStyle(.menu)
-            Picker("Day", selection: $value.day) {
-                ForEach(UInt8(1)...Date2026.daysInMonth(value.month), id: \.self) { day in
-                    Text(String(day)).tag(day)
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .fixedSize()
+                .accessibilityLabel("\(title) month")
+
+                Picker("Day", selection: $value.day) {
+                    ForEach(UInt8(1)...Date2026.daysInMonth(value.month), id: \.self) { day in
+                        Text(String(day)).tag(day)
+                    }
                 }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .fixedSize()
+                .accessibilityLabel("\(title) day")
+
+                Text("2026")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
             }
-            .pickerStyle(.menu)
-            Text("2026")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Color.taxField, in: RoundedRectangle(cornerRadius: 9))
+            .overlay {
+                RoundedRectangle(cornerRadius: 9)
+                    .stroke(Color.taxBorder, lineWidth: 0.75)
+            }
+            .fixedSize(horizontal: true, vertical: false)
         }
         .onChange(of: value.month) { _, newMonth in
             value.day = min(value.day, Date2026.daysInMonth(newMonth))
@@ -1628,6 +1858,78 @@ private struct UIntField: View {
         let limited = UInt32(min(parsed, UInt64(maximum)))
         value = limited
         if parsed > UInt64(maximum) { text = String(limited) }
+    }
+}
+
+private struct BasisPointsPercentageField: View {
+    let title: String
+    @Binding var basisPoints: UInt32
+    let maximumBasisPoints: UInt32
+    @State private var text: String
+    @State private var selection: TextSelection?
+    @FocusState private var isFocused: Bool
+
+    init(
+        title: String,
+        basisPoints: Binding<UInt32>,
+        maximumBasisPoints: UInt32 = 10_000
+    ) {
+        self.title = title
+        _basisPoints = basisPoints
+        self.maximumBasisPoints = maximumBasisPoints
+        _text = State(initialValue: formatBasisPointsPercentage(basisPoints.wrappedValue))
+    }
+
+    var body: some View {
+        LabeledContent(title) {
+            HStack(spacing: 5) {
+                TextField(
+                    text: $text,
+                    selection: $selection,
+                    prompt: Text("0")
+                ) { Text(title) }
+                .keyboardType(.decimalPad)
+                .multilineTextAlignment(.trailing)
+                .font(.body.monospacedDigit().weight(.semibold))
+                .frame(minWidth: 70)
+                .focused($isFocused)
+                .onChange(of: isFocused) { _, focused in
+                    if focused {
+                        text = formatBasisPointsPercentage(basisPoints)
+                        selectAll()
+                    } else {
+                        text = formatBasisPointsPercentage(basisPoints)
+                    }
+                }
+                .onChange(of: text) { _, newText in updateValue(from: newText) }
+                .onChange(of: basisPoints) { _, newValue in
+                    if !isFocused { text = formatBasisPointsPercentage(newValue) }
+                }
+                Text("%")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func selectAll() {
+        DispatchQueue.main.async {
+            selection = TextSelection(range: text.startIndex..<text.endIndex)
+        }
+    }
+
+    private func updateValue(from input: String) {
+        let sanitized = sanitizePercentageText(input)
+        if sanitized != input {
+            text = sanitized
+            return
+        }
+        guard let parsed = parseBasisPointsPercentage(sanitized) else { return }
+        let limited = min(parsed, maximumBasisPoints)
+        basisPoints = limited
+        if parsed > maximumBasisPoints {
+            text = formatBasisPointsPercentage(limited)
+        }
     }
 }
 
@@ -1948,6 +2250,73 @@ private struct AboutView: View {
             }
         }
     }
+}
+
+func formatBasisPointsPercentage(_ basisPoints: UInt32) -> String {
+    let wholePercent = basisPoints / 100
+    let fractionalPercent = basisPoints % 100
+    if fractionalPercent == 0 { return String(wholePercent) }
+    if fractionalPercent.isMultiple(of: 10) {
+        return "\(wholePercent).\(fractionalPercent / 10)"
+    }
+    let fraction = fractionalPercent < 10
+        ? "0\(fractionalPercent)"
+        : String(fractionalPercent)
+    return "\(wholePercent).\(fraction)"
+}
+
+func parseBasisPointsPercentage(_ text: String) -> UInt32? {
+    if text.isEmpty { return 0 }
+    let parts = text.split(separator: ".", omittingEmptySubsequences: false)
+    guard parts.count <= 2,
+          parts.allSatisfy({ part in
+              part.allSatisfy { $0.isASCII && $0.isNumber }
+          }),
+          parts.count == 1 || parts[1].count <= 2
+    else { return nil }
+
+    let wholeText = String(parts[0])
+    let wholePercent = wholeText.isEmpty ? 0 : UInt64(wholeText)
+    guard let wholePercent,
+          wholePercent <= UInt64(UInt32.max) / 100
+    else { return nil }
+
+    let fractionalText = parts.count == 2 ? String(parts[1]) : ""
+    let fractionalBasisPoints: UInt64
+    switch fractionalText.count {
+    case 0:
+        fractionalBasisPoints = 0
+    case 1:
+        guard let digit = UInt64(fractionalText) else { return nil }
+        fractionalBasisPoints = digit * 10
+    case 2:
+        guard let digits = UInt64(fractionalText) else { return nil }
+        fractionalBasisPoints = digits
+    default:
+        return nil
+    }
+
+    let total = wholePercent * 100 + fractionalBasisPoints
+    guard total <= UInt64(UInt32.max) else { return nil }
+    return UInt32(total)
+}
+
+private func sanitizePercentageText(_ input: String) -> String {
+    var output = ""
+    var hasSeparator = false
+    var fractionalDigits = 0
+    for character in input {
+        if character.isASCII, character.isNumber {
+            if !hasSeparator || fractionalDigits < 2 {
+                output.append(character)
+                if hasSeparator { fractionalDigits += 1 }
+            }
+        } else if (character == "." || character == ","), !hasSeparator {
+            output.append(".")
+            hasSeparator = true
+        }
+    }
+    return output
 }
 
 private func groupedDigits(_ value: UInt32) -> String {

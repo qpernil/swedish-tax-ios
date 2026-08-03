@@ -51,7 +51,7 @@ enum IncomeKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .oneTimeSalary: "One-time salary / termination payment"
         case .monthlyOccupationalPension: "Tjänstepension — monthly over a period"
         case .annualOccupationalPension: "Tjänstepension — annual total"
-        case .ownCompanyDividend: "Dividend from own AB — within gränsbelopp"
+        case .ownCompanyDividend: "Dividend from own AB"
         }
     }
 
@@ -71,6 +71,10 @@ enum IncomeKind: String, Codable, CaseIterable, Identifiable, Sendable {
     }
 
     var isDividend: Bool { self == .ownCompanyDividend }
+
+    var isSalary: Bool {
+        self == .annualSalary || self == .monthlySalary || self == .oneTimeSalary
+    }
 
     var isPension: Bool {
         self == .monthlyOccupationalPension || self == .annualOccupationalPension
@@ -185,8 +189,14 @@ struct VacationCompensation: Codable, Equatable, Sendable {
     func amount(monthlySalary: UInt32) -> UInt32 {
         let denominator: UInt64 = 21 * 10_000
         let numeratorPerDay: UInt64 = 10_000 + 43 * 21
-        let numerator = UInt64(monthlySalary) * UInt64(payoutDays) * numeratorPerDay
-        return UInt32(min((numerator + denominator / 2) / denominator, UInt64(UInt32.max)))
+        let salaryDays = UInt64(monthlySalary) * UInt64(payoutDays)
+        let numerator = salaryDays > UInt64.max / numeratorPerDay
+            ? UInt64.max
+            : salaryDays * numeratorPerDay
+        let roundedNumerator = numerator > UInt64.max - denominator / 2
+            ? UInt64.max
+            : numerator + denominator / 2
+        return UInt32(min(roundedNumerator / denominator, UInt64(UInt32.max)))
     }
 }
 
@@ -198,9 +208,11 @@ struct IncomeEntry: Codable, Identifiable, Equatable, Sendable {
     var start = Date2026(month: 1, day: 1)
     var end = Date2026(month: 12, day: 31)
     var payerRole: PayerRole = .main
+    var ownCompanySourced = false
     var adjustmentApplies = false
     var useFullYearProjectionAsAdjustmentBasis = false
-    var customWithholdingPercent: UInt32?
+    var additionalWithholdingPerPayment: UInt32?
+    var actualWithholding: UInt32?
     var vacationCompensation: VacationCompensation?
     var regularPensionPremium: RegularPensionPremium?
     var salaryExchange: SalaryExchange?
@@ -212,6 +224,84 @@ struct IncomeEntry: Codable, Identifiable, Equatable, Sendable {
         let salary = kind == .annualSalary || kind == .monthlySalary
         regularPensionPremium = salary ? RegularPensionPremium() : nil
         includedInPensionSalaryBasis = salary
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, description, kind, amount, start, end, payerRole
+        case ownCompanySourced, adjustmentApplies
+        case useFullYearProjectionAsAdjustmentBasis, additionalWithholdingPerPayment
+        case actualWithholding, vacationCompensation, regularPensionPremium
+        case salaryExchange, includedInPensionSalaryBasis
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        let id = try values.decode(UInt64.self, forKey: .id)
+        let kind = try values.decode(IncomeKind.self, forKey: .kind)
+        self.init(id: id, kind: kind)
+        description = try values.decodeIfPresent(String.self, forKey: .description) ?? ""
+        amount = try values.decodeIfPresent(UInt32.self, forKey: .amount) ?? 0
+        start = try values.decodeIfPresent(Date2026.self, forKey: .start)
+            ?? Date2026(month: 1, day: 1)
+        end = try values.decodeIfPresent(Date2026.self, forKey: .end)
+            ?? Date2026(month: 12, day: 31)
+        payerRole = try values.decodeIfPresent(PayerRole.self, forKey: .payerRole) ?? .main
+        ownCompanySourced = try values.decodeIfPresent(
+            Bool.self,
+            forKey: .ownCompanySourced
+        ) ?? false
+        adjustmentApplies = try values.decodeIfPresent(
+            Bool.self,
+            forKey: .adjustmentApplies
+        ) ?? false
+        useFullYearProjectionAsAdjustmentBasis = try values.decodeIfPresent(
+            Bool.self,
+            forKey: .useFullYearProjectionAsAdjustmentBasis
+        ) ?? false
+        additionalWithholdingPerPayment = try values.decodeIfPresent(
+            UInt32.self,
+            forKey: .additionalWithholdingPerPayment
+        )
+        actualWithholding = try values.decodeIfPresent(UInt32.self, forKey: .actualWithholding)
+        vacationCompensation = try values.decodeIfPresent(
+            VacationCompensation.self,
+            forKey: .vacationCompensation
+        )
+        regularPensionPremium = try values.decodeIfPresent(
+            RegularPensionPremium.self,
+            forKey: .regularPensionPremium
+        )
+        salaryExchange = try values.decodeIfPresent(SalaryExchange.self, forKey: .salaryExchange)
+        includedInPensionSalaryBasis = try values.decodeIfPresent(
+            Bool.self,
+            forKey: .includedInPensionSalaryBasis
+        ) ?? kind.isSalary
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(description, forKey: .description)
+        try values.encode(kind, forKey: .kind)
+        try values.encode(amount, forKey: .amount)
+        try values.encode(start, forKey: .start)
+        try values.encode(end, forKey: .end)
+        try values.encode(payerRole, forKey: .payerRole)
+        try values.encode(ownCompanySourced, forKey: .ownCompanySourced)
+        try values.encode(adjustmentApplies, forKey: .adjustmentApplies)
+        try values.encode(
+            useFullYearProjectionAsAdjustmentBasis,
+            forKey: .useFullYearProjectionAsAdjustmentBasis
+        )
+        try values.encodeIfPresent(
+            additionalWithholdingPerPayment,
+            forKey: .additionalWithholdingPerPayment
+        )
+        try values.encodeIfPresent(actualWithholding, forKey: .actualWithholding)
+        try values.encodeIfPresent(vacationCompensation, forKey: .vacationCompensation)
+        try values.encodeIfPresent(regularPensionPremium, forKey: .regularPensionPremium)
+        try values.encodeIfPresent(salaryExchange, forKey: .salaryExchange)
+        try values.encode(includedInPensionSalaryBasis, forKey: .includedInPensionSalaryBasis)
     }
 
     func amount(forMonth month: UInt8) -> UInt32 {
@@ -229,6 +319,24 @@ struct IncomeEntry: Codable, Identifiable, Equatable, Sendable {
         kind.isMonthly
             ? (1...12).reduce(0) { $0.saturatingAdd(amount(forMonth: UInt8($1))) }
             : amount
+    }
+
+    var withholdingPaymentCount: UInt32 {
+        switch kind {
+        case .annualSalary, .annualOccupationalPension:
+            return 12
+        case .monthlySalary, .monthlyOccupationalPension:
+            guard start.clamped <= end.clamped else { return 0 }
+            return UInt32(end.clamped.month - start.clamped.month + 1)
+        case .oneTimeSalary:
+            return 1
+        case .ownCompanyDividend:
+            return 0
+        }
+    }
+
+    var requestedAdditionalWithholding: UInt32 {
+        (additionalWithholdingPerPayment ?? 0).saturatingMultiply(withholdingPaymentCount)
     }
 
     var isValid: Bool { !kind.isMonthly || start.clamped <= end.clamped }
@@ -298,7 +406,10 @@ struct IncomeEntry: Codable, Identifiable, Equatable, Sendable {
         return exchange.pensionContribution
     }
 
-    mutating func prepareForKindChange(from previous: IncomeKind) {
+    mutating func prepareForKindChange(
+        from previous: IncomeKind,
+        adjustmentAvailable: Bool = false
+    ) {
         guard previous != kind else { return }
         let salary = kind == .annualSalary || kind == .monthlySalary
         includedInPensionSalaryBasis = salary
@@ -309,6 +420,19 @@ struct IncomeEntry: Codable, Identifiable, Equatable, Sendable {
         }
         if kind != .oneTimeSalary { salaryExchange = nil }
         if kind != .monthlySalary { vacationCompensation = nil }
+        if kind.isDividend {
+            adjustmentApplies = false
+            additionalWithholdingPerPayment = nil
+        } else if previous.isDividend, payerRole == .main {
+            adjustmentApplies = adjustmentAvailable
+        }
+        if !kind.isSalary { ownCompanySourced = false }
+    }
+
+    mutating func setPayerRole(_ role: PayerRole, adjustmentAvailable: Bool) {
+        guard payerRole != role else { return }
+        payerRole = role
+        adjustmentApplies = adjustmentAvailable && role == .main && !kind.isDividend
     }
 
     /// Mirrors the Rust editor: changing the annual entitlement recalculates
@@ -343,7 +467,33 @@ enum IncomePlanValidationIssue: Equatable, Sendable {
 struct IncomePlan: Codable, Equatable, Sendable {
     var entries: [IncomeEntry]
     var adjustmentPercent: UInt32?
+    var dividendAllowance = DividendAllowanceInputs2027()
     private var nextID: UInt64
+
+    private enum CodingKeys: String, CodingKey {
+        case entries, adjustmentPercent, dividendAllowance, nextID
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        entries = try values.decode([IncomeEntry].self, forKey: .entries)
+        adjustmentPercent = try values.decodeIfPresent(UInt32.self, forKey: .adjustmentPercent)
+        dividendAllowance = try values.decodeIfPresent(
+            DividendAllowanceInputs2027.self,
+            forKey: .dividendAllowance
+        ) ?? DividendAllowanceInputs2027()
+        nextID = try values.decodeIfPresent(UInt64.self, forKey: .nextID)
+            ?? entries.map(\.id).max().map { $0 == .max ? .max : $0 + 1 }
+            ?? 1
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(entries, forKey: .entries)
+        try values.encodeIfPresent(adjustmentPercent, forKey: .adjustmentPercent)
+        try values.encode(dividendAllowance, forKey: .dividendAllowance)
+        try values.encode(nextID, forKey: .nextID)
+    }
 
     init(monthlySalary: UInt32) {
         var entry = IncomeEntry(id: 1, kind: .monthlySalary)
@@ -351,6 +501,7 @@ struct IncomePlan: Codable, Equatable, Sendable {
         entry.amount = monthlySalary
         entries = [entry]
         adjustmentPercent = nil
+        dividendAllowance = DividendAllowanceInputs2027()
         nextID = 2
     }
 
@@ -360,6 +511,7 @@ struct IncomePlan: Codable, Equatable, Sendable {
         entry.amount = annualSalary
         entries = [entry]
         adjustmentPercent = nil
+        dividendAllowance = DividendAllowanceInputs2027()
         nextID = 2
     }
 
@@ -367,8 +519,20 @@ struct IncomePlan: Codable, Equatable, Sendable {
     mutating func addEntry(kind: IncomeKind = .annualSalary) -> UInt64 {
         let id = nextID
         nextID = nextID == .max ? .max : nextID + 1
-        entries.append(IncomeEntry(id: id, kind: kind))
+        var entry = IncomeEntry(id: id, kind: kind)
+        entry.adjustmentApplies = adjustmentPercent != nil && !kind.isDividend
+        entries.append(entry)
         return id
+    }
+
+    mutating func setAdjustmentEnabled(_ enabled: Bool) {
+        guard enabled != (adjustmentPercent != nil) else { return }
+        adjustmentPercent = enabled ? 30 : nil
+        for index in entries.indices {
+            entries[index].adjustmentApplies = enabled
+                && entries[index].payerRole == .main
+                && !entries[index].kind.isDividend
+        }
     }
 
     mutating func removeEntry(id: UInt64) {
@@ -393,6 +557,16 @@ struct IncomePlan: Codable, Equatable, Sendable {
     }
 
     var isValid: Bool { validationIssue == nil }
+
+    var ownCompanySourcedWorkIncome: UInt32 {
+        entries
+            .filter { $0.kind.isSalary && $0.ownCompanySourced }
+            .reduce(0) { $0.saturatingAdd($1.totalAnnualAmount) }
+    }
+
+    func dividendAllowance2027() throws -> DividendAllowance2027 {
+        try dividendAllowance.calculate(ownerCashSalary2026: ownCompanySourcedWorkIncome)
+    }
 
     var totals: IncomePlanTotals {
         entries.reduce(into: IncomePlanTotals()) { totals, entry in
@@ -445,8 +619,11 @@ struct IncomePlan: Codable, Equatable, Sendable {
             return EntryWithholding(
                 entryID: entry.id,
                 gross: gross,
-                withheld: result.0,
-                rule: result.1
+                withheld: result.withheld,
+                regularWithheld: result.regular,
+                supplementalWithheld: result.supplemental,
+                additionalWithheld: result.additional,
+                rule: result.rule
             )
         }
         return WithholdingSummary(
@@ -496,21 +673,60 @@ struct IncomePlan: Codable, Equatable, Sendable {
         totals: IncomePlanTotals,
         table: UInt8,
         ageGroup: TaxAgeGroup
-    ) throws -> (UInt32, AppliedWithholding) {
-        if entry.kind.isDividend { return (0, .none) }
-        if let percent = entry.customWithholdingPercent {
-            return (percentage(gross, percent), .customPercent(percent))
+    ) throws -> (
+        withheld: UInt32,
+        regular: UInt32,
+        supplemental: UInt32,
+        additional: UInt32,
+        rule: AppliedWithholding
+    ) {
+        if let actual = entry.actualWithholding {
+            return (actual, actual, 0, 0, .actualAmount)
         }
+        if entry.kind.isDividend { return (0, 0, 0, 0, .none) }
+
+        func addingRequestedWithholding(
+            _ base: (
+                withheld: UInt32,
+                regular: UInt32,
+                supplemental: UInt32,
+                rule: AppliedWithholding
+            )
+        ) -> (
+            withheld: UInt32,
+            regular: UInt32,
+            supplemental: UInt32,
+            additional: UInt32,
+            rule: AppliedWithholding
+        ) {
+            let additional = min(
+                entry.requestedAdditionalWithholding,
+                gross.saturatingSubtract(base.withheld)
+            )
+            return (
+                base.withheld.saturatingAdd(additional),
+                base.regular,
+                base.supplemental,
+                additional,
+                base.rule
+            )
+        }
+
         if entry.adjustmentApplies, let percent = adjustmentPercent {
-            return (percentage(gross, percent), .adjustmentPercent(percent))
+            let withheld = percentage(gross, percent)
+            return addingRequestedWithholding(
+                (withheld, withheld, 0, .adjustmentPercent(percent))
+            )
         }
         if entry.payerRole == .secondary {
-            return (percentage(gross, 30), .secondary30)
+            let withheld = percentage(gross, 30)
+            return addingRequestedWithholding((withheld, withheld, 0, .secondary30))
         }
         let column = entry.kind.isPension ? ageGroup.pensionColumn : ageGroup.salaryColumn
         if entry.kind == .oneTimeSalary {
             let percent = oneTimeWithholdingRate(column: column, annualIncome: totals.workIncome)
-            return (percentage(gross, percent), .oneTimeTable(percent))
+            let withheld = percentage(gross, percent)
+            return addingRequestedWithholding((withheld, withheld, 0, .oneTimeTable(percent)))
         }
         var regularWithheld: UInt32 = 0
         if entry.kind.isMonthly {
@@ -531,11 +747,20 @@ struct IncomePlan: Codable, Equatable, Sendable {
             )
         }
         let vacation = entry.vacationCompensationAmount
-        guard vacation > 0 else { return (regularWithheld, .table(column)) }
+        guard vacation > 0 else {
+            return addingRequestedWithholding(
+                (regularWithheld, regularWithheld, 0, .table(column))
+            )
+        }
         let percent = oneTimeWithholdingRate(column: column, annualIncome: totals.workIncome)
-        return (
-            regularWithheld.saturatingAdd(percentage(vacation, percent)),
-            .tableAndOneTime(column, percent)
+        let supplementalWithheld = percentage(vacation, percent)
+        return addingRequestedWithholding(
+            (
+                regularWithheld.saturatingAdd(supplementalWithheld),
+                regularWithheld,
+                supplementalWithheld,
+                .tableAndOneTime(column, percent)
+            )
         )
     }
 }
@@ -576,23 +801,23 @@ struct SalaryExchangeAllowance: Equatable, Sendable {
 }
 
 enum AppliedWithholding: Equatable, Sendable {
+    case actualAmount
     case table(TaxColumn)
     case tableAndOneTime(TaxColumn, UInt32)
     case oneTimeTable(UInt32)
     case secondary30
     case adjustmentPercent(UInt32)
-    case customPercent(UInt32)
     case none
 
     var description: String {
         switch self {
+        case .actualAmount: "Actual amount entered"
         case .table(let column): "Table, column \(column.rawValue)"
         case .tableAndOneTime(let column, let percent):
             "Table, column \(column.rawValue) + one-time \(percent)%"
         case .oneTimeTable(let percent): "One-time table \(percent)%"
         case .secondary30: "Secondary payer 30%"
         case .adjustmentPercent(let percent): "Jämkning \(percent)%"
-        case .customPercent(let percent): "Custom \(percent)%"
         case .none: "No preliminary withholding"
         }
     }
@@ -602,6 +827,9 @@ struct EntryWithholding: Equatable, Sendable {
     let entryID: UInt64
     let gross: UInt32
     let withheld: UInt32
+    let regularWithheld: UInt32
+    let supplementalWithheld: UInt32
+    let additionalWithheld: UInt32
     let rule: AppliedWithholding
 }
 
@@ -686,7 +914,7 @@ struct PlanCalculation: Equatable, Sendable {
             adjustmentCalibration = nil
         }
         ordinaryFinalTax = adjustmentCalibration?.projectedOrdinaryTax ?? annualTax.total
-        dividendTax = percentage(totals.dividendIncome, 20)
+        dividendTax = percentage(totals.dividendIncome, qualifiedDividendTaxPercent)
         totalTax = ordinaryFinalTax.saturatingAdd(dividendTax)
         withholding = try plan.estimatedWithholding(table: table, ageGroup: ageGroup)
         withheldTax = withholding.total

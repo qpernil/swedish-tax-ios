@@ -15,8 +15,8 @@ in a phone-first, vertically scrolling layout.
 - Annual salary, monthly salary, one-time salary, monthly or annual
   occupational pension, and own-company dividends.
 - Multiple income entries with exact 2026 start and end dates.
-- Main-payer table withholding, secondary-payer 30% withholding, and custom
-  withholding per entry.
+- Main-payer table withholding, secondary-payer 30% withholding, and voluntary
+  additional withholding in SEK per payment.
 - Jämkning as an adjustable percentage, selectable per payer, with optional
   full-year salary calibration.
 - Vacation compensation based on annual entitlement and payment period, with

@@ -2,6 +2,7 @@ import CryptoKit
 import Foundation
 import XCTest
 #if canImport(SwedishTax)
+import SwiftUI
 @testable import SwedishTax
 #else
 @testable import SwedishTaxCore
@@ -14,6 +15,113 @@ final class TaxCalculatorTests: XCTestCase {
         191_808, 296_000, 310_208, 466_496, 478_336, 660_672, 673_038, 760_128
     ]
     private let taxableIncomeBreakpoints: [UInt32] = [40_000, 118_400, 240_000, 643_200]
+
+    private func threeEntryPlan(
+        targetKind: IncomeKind,
+        targetIndex: Int
+    ) -> (baselinePlan: IncomePlan, plan: IncomePlan, targetID: UInt64) {
+        var baselinePlan = IncomePlan(monthlySalary: 45_000)
+        baselinePlan.entries[0].description = "Salary"
+        let pensionID = baselinePlan.addEntry(kind: .annualOccupationalPension)
+        let pensionIndex = baselinePlan.entries.index(before: baselinePlan.entries.endIndex)
+        precondition(baselinePlan.entries[pensionIndex].id == pensionID)
+        baselinePlan.entries[pensionIndex].description = "Pension"
+        baselinePlan.entries[pensionIndex].amount = 120_000
+        baselinePlan.entries[pensionIndex].payerRole = .secondary
+
+        var plan = baselinePlan
+        let targetID = plan.addEntry(kind: targetKind)
+        let appendedIndex = plan.entries.index(before: plan.entries.endIndex)
+        precondition(plan.entries[appendedIndex].id == targetID)
+        plan.entries[appendedIndex].description = "Temporary \(targetKind)"
+        plan.entries[appendedIndex].amount = 60_000
+        let addedEntry = plan.entries.remove(at: appendedIndex)
+        plan.entries.insert(addedEntry, at: targetIndex)
+        return (baselinePlan, plan, targetID)
+    }
+
+    func testAddingAndRemovingEveryIncomeKindAtFirstMiddleAndLastRestoresCalculation() throws {
+        for kind in IncomeKind.allCases {
+            for targetIndex in 0..<3 {
+                let scenario = threeEntryPlan(targetKind: kind, targetIndex: targetIndex)
+                var plan = scenario.plan
+                let position = ["first", "middle", "last"][targetIndex]
+                let context = "\(kind) in \(position) position"
+                let baselineCalculation = try XCTUnwrap(
+                    PlanCalculation(table: 32, ageGroup: .under66, plan: scenario.baselinePlan)
+                )
+
+                XCTAssertEqual(
+                    plan.entries.count,
+                    scenario.baselinePlan.entries.count + 1,
+                    context
+                )
+                XCTAssertEqual(plan.entries[targetIndex].id, scenario.targetID, context)
+                XCTAssertEqual(plan.entries[targetIndex].kind, kind, context)
+                let calculationWithAddedEntry = try XCTUnwrap(
+                    PlanCalculation(table: 32, ageGroup: .under66, plan: plan)
+                )
+                XCTAssertNotEqual(calculationWithAddedEntry, baselineCalculation, context)
+
+                plan.removeEntry(id: scenario.targetID)
+
+                let calculationAfterRemoval = try XCTUnwrap(
+                    PlanCalculation(table: 32, ageGroup: .under66, plan: plan)
+                )
+                XCTAssertEqual(plan.entries, scenario.baselinePlan.entries, context)
+                XCTAssertEqual(calculationAfterRemoval, baselineCalculation, context)
+            }
+        }
+    }
+
+#if canImport(SwedishTax)
+    @MainActor
+    func testIncomeEditorBindingRemainsSafeForEveryKindAndListPosition() throws {
+        for kind in IncomeKind.allCases {
+            for targetIndex in 0..<3 {
+                let scenario = threeEntryPlan(targetKind: kind, targetIndex: targetIndex)
+                var plan = scenario.plan
+                let targetID = scenario.targetID
+                let deletedSnapshot = try XCTUnwrap(plan.entries.first { $0.id == targetID })
+                let position = ["first", "middle", "last"][targetIndex]
+                let context = "\(kind) in \(position) position"
+                let baselineCalculation = try XCTUnwrap(
+                    PlanCalculation(table: 32, ageGroup: .under66, plan: scenario.baselinePlan)
+                )
+                let planBinding = Binding(
+                    get: { plan },
+                    set: { plan = $0 }
+                )
+                let entryBinding = try XCTUnwrap(planBinding.incomeEntry(id: targetID))
+
+                XCTAssertEqual(
+                    plan.entries.count,
+                    scenario.baselinePlan.entries.count + 1,
+                    context
+                )
+                XCTAssertEqual(plan.entries[targetIndex].id, targetID, context)
+                XCTAssertEqual(plan.entries[targetIndex].kind, kind, context)
+                let calculationWithAddedEntry = try XCTUnwrap(
+                    PlanCalculation(table: 32, ageGroup: .under66, plan: plan)
+                )
+                XCTAssertNotEqual(calculationWithAddedEntry, baselineCalculation, context)
+
+                plan.removeEntry(id: targetID)
+
+                XCTAssertEqual(entryBinding.wrappedValue, deletedSnapshot, context)
+                var outgoingEdit = entryBinding.wrappedValue
+                outgoingEdit.amount = .max
+                entryBinding.wrappedValue = outgoingEdit
+                let calculationAfterRemoval = try XCTUnwrap(
+                    PlanCalculation(table: 32, ageGroup: .under66, plan: plan)
+                )
+                XCTAssertEqual(plan.entries, scenario.baselinePlan.entries, context)
+                XCTAssertEqual(calculationAfterRemoval, baselineCalculation, context)
+                XCTAssertNil(planBinding.incomeEntry(id: targetID), context)
+            }
+        }
+    }
+#endif
 
     func testPersistedAppStateRoundTripsTheCompletePlan() throws {
         let directory = FileManager.default.temporaryDirectory

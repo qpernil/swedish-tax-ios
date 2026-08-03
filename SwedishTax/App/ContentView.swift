@@ -672,11 +672,7 @@ private struct IncomeEntryEditor: View {
     let ageGroup: TaxAgeGroup
     @Environment(\.dismiss) private var dismiss
 
-    private var entryIndex: Int? { plan.entries.firstIndex { $0.id == entryID } }
-    private var entry: Binding<IncomeEntry>? {
-        guard let entryIndex else { return nil }
-        return $plan.entries[entryIndex]
-    }
+    private var entry: Binding<IncomeEntry>? { $plan.incomeEntry(id: entryID) }
 
     private var withholdingResult: Result<EntryWithholding?, Error> {
         Result {
@@ -1110,6 +1106,28 @@ private struct IncomeEntryEditor: View {
                 guard var exchange = entry.wrappedValue.salaryExchange else { return }
                 exchange[keyPath: keyPath] = value
                 entry.wrappedValue.salaryExchange = exchange
+            }
+        )
+    }
+}
+
+extension Binding where Value == IncomePlan {
+    /// Keeps an editor binding tied to an entry's identity rather than its array index.
+    /// SwiftUI can read an outgoing view once more after the entry has been deleted, so
+    /// the last known value is used for those reads and writes are ignored after removal.
+    func incomeEntry(id: UInt64) -> Binding<IncomeEntry>? {
+        guard let snapshot = wrappedValue.entries.first(where: { $0.id == id }) else {
+            return nil
+        }
+        return Binding<IncomeEntry>(
+            get: {
+                wrappedValue.entries.first(where: { $0.id == id }) ?? snapshot
+            },
+            set: { updatedEntry in
+                guard let index = wrappedValue.entries.firstIndex(where: { $0.id == id }) else {
+                    return
+                }
+                wrappedValue.entries[index] = updatedEntry
             }
         )
     }

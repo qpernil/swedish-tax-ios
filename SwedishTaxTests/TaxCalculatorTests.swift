@@ -17,6 +17,133 @@ final class TaxCalculatorTests: XCTestCase {
     private let taxableIncomeBreakpoints: [UInt32] = [40_000, 118_400, 240_000, 643_200]
 
     #if canImport(SwedishTax)
+    func testSelectedEngineBadgeMatchesTheCompileChoice() {
+        if TaxEngine.usesRustCore {
+            XCTAssertEqual(TaxEngine.badgeText, "Rust core active")
+            XCTAssertEqual(TaxEngine.badgeText, RustTaxCore.engineBadgeText)
+        } else {
+            XCTAssertEqual(TaxEngine.badgeText, "Swift core active")
+        }
+    }
+
+    func testRustCoreCallsExistingMonthlyDeduction() throws {
+        XCTAssertEqual(
+            try RustTaxCore.monthlyDeduction(
+                table: 32,
+                column: .column1,
+                grossMonthlyIncome: 80_000
+            ),
+            .amount(25_944)
+        )
+        XCTAssertEqual(
+            try RustTaxCore.monthlyDeduction(
+                table: 32,
+                column: .column1,
+                grossMonthlyIncome: 80_001
+            ),
+            .percent(32)
+        )
+        XCTAssertThrowsError(
+            try RustTaxCore.monthlyDeduction(
+                table: 28,
+                column: .column1,
+                grossMonthlyIncome: 50_000
+            )
+        ) { error in
+            XCTAssertEqual(error as? RustTaxCoreError, .invalidInput)
+        }
+    }
+
+    func testRustCoreAnnualTaxMatchesSwiftCore() throws {
+        let incomes: [UInt32] = [0, 31_200, 216_000, 540_000, 660_000, 1_000_000]
+        for table in TaxCalculator.minTaxTable...TaxCalculator.maxTaxTable {
+            for column in TaxColumn.allCases {
+                for income in incomes {
+                    XCTAssertEqual(
+                        try RustTaxCore.annualTax(
+                            table: table,
+                            column: column,
+                            grossYearlyIncome: income
+                        ),
+                        TaxCalculator.calculateAnnualTax(
+                            table: table,
+                            column: column,
+                            grossYearlyIncome: income
+                        ),
+                        "table=\(table), column=\(column), income=\(income)"
+                    )
+                }
+            }
+        }
+    }
+
+    func testRustCoreMixedIncomeTaxMatchesSwiftCore() throws {
+        let profiles = [
+            AnnualIncomeProfile(workIncome: 420_000, pensionIncome: 120_000),
+            AnnualIncomeProfile(workIncome: 0, pensionIncome: 540_000),
+            AnnualIncomeProfile(workIncome: 540_000, pensionIncome: 0)
+        ]
+        for table in TaxCalculator.minTaxTable...TaxCalculator.maxTaxTable {
+            for ageGroup in TaxAgeGroup.allCases {
+                for profile in profiles {
+                    XCTAssertEqual(
+                        try RustTaxCore.annualTax(
+                            table: table,
+                            ageGroup: ageGroup,
+                            profile: profile
+                        ),
+                        TaxCalculator.calculateAnnualTax(
+                            table: table,
+                            ageGroup: ageGroup,
+                            profile: profile
+                        ),
+                        "table=\(table), age=\(ageGroup), profile=\(profile)"
+                    )
+                }
+            }
+        }
+    }
+
+    func testRustFullPlanCalculationMatchesSwiftCore() throws {
+        var plans = [IncomePlan(monthlySalary: 55_033)]
+
+        var mixed = IncomePlan(monthlySalary: 93_000)
+        mixed.adjustmentPercent = 33
+        mixed.entries[0].end = Date2026(month: 10, day: 18)
+        mixed.entries[0].adjustmentApplies = true
+        mixed.entries[0].useFullYearProjectionAsAdjustmentBasis = true
+        mixed.entries[0].additionalWithholdingPerPayment = 1_500
+        mixed.entries[0].vacationCompensation = VacationCompensation(
+            annualEntitlementDays: 25,
+            start: mixed.entries[0].start,
+            end: mixed.entries[0].end
+        )
+        let pensionID = mixed.addEntry(kind: .monthlyOccupationalPension)
+        let pensionIndex = try XCTUnwrap(mixed.entries.firstIndex { $0.id == pensionID })
+        mixed.entries[pensionIndex].amount = 12_500
+        mixed.entries[pensionIndex].payerRole = .secondary
+        let dividendID = mixed.addEntry(kind: .ownCompanyDividend)
+        let dividendIndex = try XCTUnwrap(mixed.entries.firstIndex { $0.id == dividendID })
+        mixed.entries[dividendIndex].amount = 120_000
+        plans.append(mixed)
+
+        for table: UInt8 in [29, 32, 42] {
+            for ageGroup in TaxAgeGroup.allCases {
+                for plan in plans {
+                    let swift = try XCTUnwrap(
+                        PlanCalculation(table: table, ageGroup: ageGroup, plan: plan)
+                    )
+                    let rust = try RustTaxCore.planCalculation(
+                        table: table,
+                        ageGroup: ageGroup,
+                        plan: plan
+                    )
+                    XCTAssertEqual(rust, swift, "table=\(table), age=\(ageGroup)")
+                }
+            }
+        }
+    }
+
     func testBasisPointPercentagesUseExactTextConversion() {
         XCTAssertEqual(formatBasisPointsPercentage(0), "0")
         XCTAssertEqual(formatBasisPointsPercentage(570), "5.7")

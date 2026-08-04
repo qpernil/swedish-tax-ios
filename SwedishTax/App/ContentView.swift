@@ -29,7 +29,7 @@ struct ContentView: View {
             return .invalid(issue)
         }
         do {
-            guard let calculation = try PlanCalculation(
+            guard let calculation = try TaxEngine.planCalculation(
                 table: table,
                 ageGroup: ageGroup,
                 plan: plan
@@ -151,6 +151,9 @@ struct ContentView: View {
                 Text("Income plan and tax reconciliation")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                Label(TaxEngine.badgeText, systemImage: "checkmark.seal.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.taxGreen)
             }
             Spacer(minLength: 12)
             Text("2026")
@@ -2225,6 +2228,10 @@ private struct AboutView: View {
                     Label("Income year 2026", systemImage: "calendar")
                     Label("Tables 29–42", systemImage: "tablecells")
                     Label("SKV 433, edition 36", systemImage: "doc.text")
+                    Label(
+                        "Calculation engine: \(TaxEngine.badgeText)",
+                        systemImage: "checkmark.seal"
+                    )
                     Label("Works entirely offline", systemImage: "lock.shield")
                 }
                 Section("Included planning features") {

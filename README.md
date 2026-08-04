@@ -1,13 +1,14 @@
 # Swedish Tax 2026 for iOS
 
-A native SwiftUI income planner and tax calculator based on Skatteverket's
-2026 preliminary income-tax tables. The app is designed for iPhone, also runs
-on iPad, and performs every calculation locally without a server or runtime
-network dependency.
+A native SwiftUI income planner backed by the shared Rust tax core and based on
+Skatteverket's 2026 preliminary income-tax tables. The app is designed for
+iPhone, also runs on iPad, and performs every calculation locally without a
+server or runtime network dependency.
 
-The calculation engine is a Swift translation of the existing C# and Rust
-implementations. The interface carries over the Rust GUI's planning features
-in a phone-first, vertically scrolling layout.
+Swift owns the interface, persistence, and Apple-platform integration. The
+complete displayed plan calculation crosses a versioned, typed C ABI into
+Rust. The original Swift calculation implementation remains temporarily as a
+differential test oracle during the migration.
 
 ## Features
 
@@ -38,12 +39,43 @@ user input.
 - Xcode 26 or later
 - iOS 18 or later
 - Swift 6
+- Rust with the `aarch64-apple-ios` and `aarch64-apple-ios-sim` targets
 
 The iOS 18 deployment target is intentional: it provides native 128-bit
 integer support used by the calculation engine, and this project has no
 backward-compatibility requirement.
 
 ## Run in Xcode
+
+The Rust bridge is generated locally and intentionally not committed. Build its
+device and Apple Silicon simulator slices in the `swedish-tax` repository:
+
+```sh
+cargo xtask ios
+```
+
+This creates `target/ios/SwedishTaxCore.xcframework`. Give Xcode the containing
+directory through its `RUST_CORE_ARTIFACTS_DIR` build setting. For example:
+
+```sh
+xcodebuild \
+  -project SwedishTax.xcodeproj \
+  -scheme SwedishTax \
+  RUST_CORE_ARTIFACTS_DIR="/absolute/path/to/swedish-tax/target/ios" \
+  build
+```
+
+The Xcode project persists `RUST_CORE_ARTIFACTS_DIR` for Debug and Release as
+`$(SRCROOT)/../swedish-tax/target/ios`, so adjacent clones work with an ordinary
+Xcode **Run** or **Build**. If the repositories live elsewhere, change that
+user-defined setting once in the app target's **Build Settings**; subsequent
+GUI builds reuse it.
+
+The app target defines the `USE_RUST_CORE` active compilation condition. Keep
+it for the Rust production path, or remove it from **Build Settings → Active
+Compilation Conditions** to compile the retained Swift core instead. The badge
+at the top of the app identifies the selected engine; its Rust-build text is
+returned by the Rust library through FFI.
 
 1. Open `SwedishTax.xcodeproj`.
 2. Select the `SwedishTax` target and open **Signing & Capabilities**.
@@ -62,8 +94,8 @@ recipient to enable Developer Mode.
 
 ## Tests
 
-The core is also a Swift package, so the full engine and parity suite can run
-without launching the app:
+The retained Swift implementation is also a Swift package, so its legacy suite
+can run without launching the app:
 
 ```sh
 swift test --disable-sandbox
@@ -81,7 +113,9 @@ xcodebuild \
   build CODE_SIGNING_ALLOWED=NO
 ```
 
-The parity suite covers the official resource hash, every published table
+The Xcode suite additionally calls the Rust XCFramework through Swift and
+compares complete Rust and Swift plan results. Together the suites cover the
+official resource hash and every published table
 boundary, monthly amount and percentage rows against the annual formula, SKV
 433 worked examples and formula transitions. It also exercises mixed salary
 and pension plans, payer precedence, jämkning calibration, exact payment

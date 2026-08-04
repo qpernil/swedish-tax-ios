@@ -4,3 +4,4 @@ DerivedData/
 build/
 *.xcuserstate
 xcuserdata/
+Vendor/SwedishTaxCore.xcframework/

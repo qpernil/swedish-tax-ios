@@ -1,4 +1,3 @@
-#if canImport(SwedishTaxFFI)
 import SwedishTaxFFI
 
 enum RustTaxCoreError: Error, Equatable {
@@ -11,16 +10,8 @@ enum RustTaxCoreError: Error, Equatable {
 }
 
 /// Thin Swift mapping over the stable C API exported by the Rust tax core.
-///
-/// The existing Swift implementation remains available as a compile-time
-/// fallback and differential-test oracle while the migration is validated.
 enum RustTaxCore {
     private static let contractVersion: UInt32 = 1
-
-    static var engineBadgeText: String {
-        guard let badge = swedish_tax_engine_badge() else { return "Rust core unavailable" }
-        return String(cString: badge)
-    }
 
     static func monthlyDeduction(
         table: UInt8,
@@ -287,7 +278,10 @@ private extension PlanCalculation {
         monthlyIncome = value.monthly_income
         annualIncome = value.annual_income
         ordinaryIncome = value.ordinary_income
+        workIncome = value.work_income
+        pensionIncome = value.pension_income
         dividendIncome = value.dividend_income
+        sgiAnnualRate = value.sgi_annual_rate
         switch value.deduction_kind {
         case 0: tableDeduction = .amount(value.deduction_value)
         case 1: tableDeduction = .percent(value.deduction_value)
@@ -357,10 +351,10 @@ private extension PlanCalculation {
         vacationPensionPremiums = value.vacation_pension_premiums
         salaryExchangeSacrifice = value.salary_exchange_sacrifice
         salaryExchangePensionContributions = value.salary_exchange_pension_contributions
+        pensionSalaryBasis = value.pension_salary_basis
         employerPensionContributions = value.employer_pension_contributions
         marginalRate = value.marginal_rate
         pensionProgress = try RustTaxCore.incomeBasis(value.pension_progress)
         sgiProgress = try RustTaxCore.incomeBasis(value.sgi_progress)
     }
 }
-#endif

@@ -10,20 +10,14 @@
 		B00000000000000000000001 /* SwedishTaxApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000001 /* SwedishTaxApp.swift */; };
 		B00000000000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000002 /* ContentView.swift */; };
 		B00000000000000000000003 /* TaxModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000003 /* TaxModels.swift */; };
-		B00000000000000000000004 /* TaxTables.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000004 /* TaxTables.swift */; };
-		B00000000000000000000005 /* TaxCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000005 /* TaxCalculator.swift */; };
-		B00000000000000000000006 /* allmanna-tabeller-manad-2026.txt in Resources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000006 /* allmanna-tabeller-manad-2026.txt */; };
 		B00000000000000000000008 /* TaxCalculatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000008 /* TaxCalculatorTests.swift */; };
 		B00000000000000000000009 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A0000000000000000000000B /* XCTest.framework */; };
-		B0000000000000000000000A /* allmanna-tabeller-manad-2026.txt in Resources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000006 /* allmanna-tabeller-manad-2026.txt */; };
-		B0000000000000000000000B /* IncomeBases.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000000C /* IncomeBases.swift */; };
 		B0000000000000000000000C /* IncomePlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000000D /* IncomePlan.swift */; };
 		B0000000000000000000000D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000007 /* Assets.xcassets */; };
 		B0000000000000000000000E /* AppStateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000000E /* AppStateStore.swift */; };
 		B0000000000000000000000F /* DividendAllowance.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000000F /* DividendAllowance.swift */; };
 		B00000000000000000000010 /* RustTaxCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000010 /* RustTaxCore.swift */; };
 		B00000000000000000000011 /* SwedishTaxCore.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = A00000000000000000000011 /* SwedishTaxCore.xcframework */; };
-		B00000000000000000000012 /* TaxEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000012 /* TaxEngine.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -40,21 +34,16 @@
 		A00000000000000000000001 /* SwedishTaxApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwedishTaxApp.swift; sourceTree = "<group>"; };
 		A00000000000000000000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A00000000000000000000003 /* TaxModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaxModels.swift; sourceTree = "<group>"; };
-		A00000000000000000000004 /* TaxTables.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaxTables.swift; sourceTree = "<group>"; };
-		A00000000000000000000005 /* TaxCalculator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaxCalculator.swift; sourceTree = "<group>"; };
-		A00000000000000000000006 /* allmanna-tabeller-manad-2026.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "allmanna-tabeller-manad-2026.txt"; sourceTree = "<group>"; };
 		A00000000000000000000007 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A00000000000000000000008 /* TaxCalculatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaxCalculatorTests.swift; sourceTree = "<group>"; };
 		A00000000000000000000009 /* SwedishTax.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SwedishTax.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A0000000000000000000000A /* SwedishTaxTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SwedishTaxTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A0000000000000000000000B /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
-		A0000000000000000000000C /* IncomeBases.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IncomeBases.swift; sourceTree = "<group>"; };
 		A0000000000000000000000D /* IncomePlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IncomePlan.swift; sourceTree = "<group>"; };
 		A0000000000000000000000E /* AppStateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateStore.swift; sourceTree = "<group>"; };
 		A0000000000000000000000F /* DividendAllowance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DividendAllowance.swift; sourceTree = "<group>"; };
 		A00000000000000000000010 /* RustTaxCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustTaxCore.swift; sourceTree = "<group>"; };
 		A00000000000000000000011 /* SwedishTaxCore.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = SwedishTaxCore.xcframework; sourceTree = RUST_CORE_ARTIFACTS_DIR; };
-		A00000000000000000000012 /* TaxEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaxEngine.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -111,11 +100,7 @@
 			children = (
 				A0000000000000000000000E /* AppStateStore.swift */,
 				A00000000000000000000010 /* RustTaxCore.swift */,
-				A00000000000000000000012 /* TaxEngine.swift */,
 				A00000000000000000000003 /* TaxModels.swift */,
-				A00000000000000000000004 /* TaxTables.swift */,
-				A00000000000000000000005 /* TaxCalculator.swift */,
-				A0000000000000000000000C /* IncomeBases.swift */,
 				A0000000000000000000000D /* IncomePlan.swift */,
 				A0000000000000000000000F /* DividendAllowance.swift */,
 			);
@@ -152,7 +137,6 @@
 			isa = PBXGroup;
 			children = (
 				A00000000000000000000007 /* Assets.xcassets */,
-				A00000000000000000000006 /* allmanna-tabeller-manad-2026.txt */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -239,7 +223,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				B00000000000000000000006 /* allmanna-tabeller-manad-2026.txt in Resources */,
 				B0000000000000000000000D /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -248,7 +231,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				B0000000000000000000000A /* allmanna-tabeller-manad-2026.txt in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -261,13 +243,9 @@
 			files = (
 				B00000000000000000000001 /* SwedishTaxApp.swift in Sources */,
 				B00000000000000000000010 /* RustTaxCore.swift in Sources */,
-				B00000000000000000000012 /* TaxEngine.swift in Sources */,
 				B00000000000000000000002 /* ContentView.swift in Sources */,
 				B0000000000000000000000E /* AppStateStore.swift in Sources */,
 				B00000000000000000000003 /* TaxModels.swift in Sources */,
-				B00000000000000000000004 /* TaxTables.swift in Sources */,
-				B00000000000000000000005 /* TaxCalculator.swift in Sources */,
-				B0000000000000000000000B /* IncomeBases.swift in Sources */,
 				B0000000000000000000000C /* IncomePlan.swift in Sources */,
 				B0000000000000000000000F /* DividendAllowance.swift in Sources */,
 			);
@@ -349,7 +327,6 @@
 				RUST_CORE_ARTIFACTS_DIR = "$(SRCROOT)/../swedish-tax/target/ios";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) USE_RUST_CORE";
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -376,7 +353,6 @@
 				RUST_CORE_ARTIFACTS_DIR = "$(SRCROOT)/../swedish-tax/target/ios";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) USE_RUST_CORE";
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};

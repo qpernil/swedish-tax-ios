@@ -7,8 +7,8 @@ server or runtime network dependency.
 
 Swift owns the interface, persistence, and Apple-platform integration. The
 complete displayed plan calculation crosses a versioned, typed C ABI into
-Rust. The original Swift calculation implementation remains temporarily as a
-differential test oracle during the migration.
+Rust. Rust is the single source of truth for tax tables, annual tax, income
+bases, withholding, pension calculations, and complete plan results.
 
 ## Features
 
@@ -47,8 +47,9 @@ backward-compatibility requirement.
 
 ## Run in Xcode
 
-The Rust bridge is generated locally and intentionally not committed. Build its
-device and Apple Silicon simulator slices in the `swedish-tax` repository:
+The generated Rust XCFramework is intentionally not committed to the iOS
+repository. Build its device and Apple Silicon simulator slices in the
+`swedish-tax` repository:
 
 ```sh
 cargo xtask ios
@@ -71,11 +72,8 @@ Xcode **Run** or **Build**. If the repositories live elsewhere, change that
 user-defined setting once in the app target's **Build Settings**; subsequent
 GUI builds reuse it.
 
-The app target defines the `USE_RUST_CORE` active compilation condition. Keep
-it for the Rust production path, or remove it from **Build Settings → Active
-Compilation Conditions** to compile the retained Swift core instead. The badge
-at the top of the app identifies the selected engine; its Rust-build text is
-returned by the Rust library through FFI.
+The Rust artifact is a required build dependency. Xcode automatically selects
+the device or simulator slice from the XCFramework.
 
 1. Open `SwedishTax.xcodeproj`.
 2. Select the `SwedishTax` target and open **Signing & Capabilities**.
@@ -94,11 +92,11 @@ recipient to enable Developer Mode.
 
 ## Tests
 
-The retained Swift implementation is also a Swift package, so its legacy suite
-can run without launching the app:
+Run the Rust core's comprehensive unit and integration suite in the Rust
+repository:
 
 ```sh
-swift test --disable-sandbox
+cargo test --workspace
 ```
 
 To verify that the native device target compiles without signing it:
@@ -113,26 +111,24 @@ xcodebuild \
   build CODE_SIGNING_ALLOWED=NO
 ```
 
-The Xcode suite additionally calls the Rust XCFramework through Swift and
-compares complete Rust and Swift plan results. Together the suites cover the
-official resource hash and every published table
-boundary, monthly amount and percentage rows against the annual formula, SKV
-433 worked examples and formula transitions. It also exercises mixed salary
-and pension plans, payer precedence, jämkning calibration, exact payment
-periods, vacation compensation, pension contributions, salary exchange,
-dividends, PGI, SGI, and persistence round trips.
+The Xcode suite calls the Rust XCFramework through Swift and checks fixed table
+boundaries, an SKV 433 worked example, complete plan results, payer precedence,
+jämkning, vacation compensation, salary exchange, dividends, PGI, SGI, and
+persistence round trips. This verifies the C ABI, generated header, native
+linkage, ownership of returned buffers, and Swift mapping without maintaining
+a second tax engine.
 
 ## Tax data
 
-The official fixed-width monthly table is embedded unchanged at
-`SwedishTax/Resources/allmanna-tabeller-manad-2026.txt`.
+The official fixed-width monthly table is owned and embedded by the Rust core.
+Its Rust tests verify:
 
 - Records: 7,966
 - SHA-256: `8c5abe81d774ce083fec81ceed430282e39208c8b5a7a961a4760e4875e850ce`
 
-The app validates the record count, record format, table range, and continuous
-income coverage before using the resource. The checksum test protects the
-official file against accidental edits.
+The Rust core validates the record count, record format, table range, and
+continuous income coverage before using the resource. Its checksum test
+protects the official file against accidental edits.
 
 ## Persistence and privacy
 
@@ -149,11 +145,10 @@ iCloud synchronization or plan export.
 ```text
 SwedishTax/
   App/                         SwiftUI application and phone interface
-  Core/                        Tax engine, income planning, and persistence
-  Resources/                   Official table and application icon assets
-SwedishTaxTests/               Engine, resource, and parity tests
+  Core/                        Rust FFI mapping, plan model, and persistence
+  Resources/                   Application icon assets
+SwedishTaxTests/               Native bridge, UI-model, and persistence tests
 SwedishTax.xcodeproj/          Native iOS project
-Package.swift                  Standalone core test package
 ```
 
 ## Official sources
@@ -167,5 +162,5 @@ Package.swift                  Standalone core test package
 ## Scope
 
 The result is a preliminary planning estimate based on the published tables
-and the assumptions implemented by the source engines. It is not an
+and the assumptions implemented by the Rust core. It is not an
 individualized final tax assessment or financial advice.

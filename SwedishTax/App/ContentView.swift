@@ -29,13 +29,11 @@ struct ContentView: View {
             return .invalid(issue)
         }
         do {
-            guard let calculation = try TaxEngine.planCalculation(
+            let calculation = try RustTaxCore.planCalculation(
                 table: table,
                 ageGroup: ageGroup,
                 plan: plan
-            ) else {
-                return .invalid(nil)
-            }
+            )
             return .available(calculation)
         } catch {
             return .taxDataUnavailable(error.localizedDescription)
@@ -151,9 +149,6 @@ struct ContentView: View {
                 Text("Income plan and tax reconciliation")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                Label(TaxEngine.badgeText, systemImage: "checkmark.seal.fill")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Color.taxGreen)
             }
             Spacer(minLength: 12)
             Text("2026")
@@ -187,7 +182,7 @@ struct ContentView: View {
                 HelpButton { helpTopic = .table }
             }
             Picker("Tax table", selection: $table) {
-                ForEach(TaxCalculator.minTaxTable...TaxCalculator.maxTaxTable, id: \.self) {
+                ForEach(supportedTaxTables, id: \.self) {
                     Text("Table \($0)").tag($0)
                 }
             }
@@ -794,7 +789,8 @@ private struct IncomeEntryEditor: View {
 
     private var withholdingResult: Result<EntryWithholding?, Error> {
         Result {
-            try plan.estimatedWithholding(table: table, ageGroup: ageGroup)
+            try RustTaxCore.planCalculation(table: table, ageGroup: ageGroup, plan: plan)
+                .withholding
                 .entries.first { $0.entryID == entryID }
         }
     }
@@ -1424,7 +1420,7 @@ private struct CalculationTraceView: View {
                         ValueRows(rows: [ValueRow("Total withheld", formatSEK(withholding.total), isTotal: true)])
                     }
                     TraceStep(number: 3, title: "Annual formula") {
-                        Text("\(formatSEK(plan.totals.workIncome)) work income + \(formatSEK(plan.totals.pensionIncome)) pension income")
+                        Text("\(formatSEK(calculation.workIncome)) work income + \(formatSEK(calculation.pensionIncome)) pension income")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                         ValueRows(rows: [ValueRow("Formula tax", formatSEK(calculation.annualTax.total), isTotal: true)])
@@ -2228,10 +2224,6 @@ private struct AboutView: View {
                     Label("Income year 2026", systemImage: "calendar")
                     Label("Tables 29–42", systemImage: "tablecells")
                     Label("SKV 433, edition 36", systemImage: "doc.text")
-                    Label(
-                        "Calculation engine: \(TaxEngine.badgeText)",
-                        systemImage: "checkmark.seal"
-                    )
                     Label("Works entirely offline", systemImage: "lock.shield")
                 }
                 Section("Included planning features") {
@@ -2246,6 +2238,11 @@ private struct AboutView: View {
                     Link("Skatteverket monthly tables", destination: URL(string: "https://www.skatteverket.se/download/18.1522bf3f19aea8075ba5af/1765287119989/allmanna-tabeller-manad.txt")!)
                     Link("2026 pensionable income (PGI)", destination: URL(string: "https://www.skatteverket.se/privat/skatter/arbeteochinkomst/pensionsgrundandeinkomstpgi.4.4f3d00a710cc9ae1c9c80008300.html")!)
                     Link("Sickness-benefit qualifying income (SGI)", destination: URL(string: "https://www.forsakringskassan.se/privatperson/sjukpenninggrundande-inkomst-sgi")!)
+                }
+                Section("Rust core and native bridge") {
+                    Text("The shared tax-calculation engine is written in Rust.")
+                    Text("The SwiftUI interface calls it through a versioned, typed C FFI bridge.")
+                    Text("The Swift interface and Rust engine run together as native ARM machine code inside the app, without an interpreter, virtual machine, separate process, or server dependency.")
                 }
             }
             .navigationTitle("About")

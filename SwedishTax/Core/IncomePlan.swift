@@ -602,36 +602,6 @@ struct IncomePlan: Codable, Equatable, Sendable {
         }
     }
 
-    func estimatedWithholding(
-        table: UInt8,
-        ageGroup: TaxAgeGroup
-    ) throws -> WithholdingSummary {
-        let totals = totals
-        let rows = try entries.map { entry -> EntryWithholding in
-            let gross = entry.totalAnnualAmount
-            let result = try entryWithholding(
-                entry,
-                gross: gross,
-                totals: totals,
-                table: table,
-                ageGroup: ageGroup
-            )
-            return EntryWithholding(
-                entryID: entry.id,
-                gross: gross,
-                withheld: result.withheld,
-                regularWithheld: result.regular,
-                supplementalWithheld: result.supplemental,
-                additionalWithheld: result.additional,
-                rule: result.rule
-            )
-        }
-        return WithholdingSummary(
-            total: rows.reduce(0) { $0.saturatingAdd($1.withheld) },
-            entries: rows
-        )
-    }
-
     func salaryExchangeAllowance(for entryID: UInt64) -> SalaryExchangeAllowance? {
         guard
             let entry = entries.first(where: { $0.id == entryID }),
@@ -667,102 +637,6 @@ struct IncomePlan: Codable, Equatable, Sendable {
         )
     }
 
-    private func entryWithholding(
-        _ entry: IncomeEntry,
-        gross: UInt32,
-        totals: IncomePlanTotals,
-        table: UInt8,
-        ageGroup: TaxAgeGroup
-    ) throws -> (
-        withheld: UInt32,
-        regular: UInt32,
-        supplemental: UInt32,
-        additional: UInt32,
-        rule: AppliedWithholding
-    ) {
-        if let actual = entry.actualWithholding {
-            return (actual, actual, 0, 0, .actualAmount)
-        }
-        if entry.kind.isDividend { return (0, 0, 0, 0, .none) }
-
-        func addingRequestedWithholding(
-            _ base: (
-                withheld: UInt32,
-                regular: UInt32,
-                supplemental: UInt32,
-                rule: AppliedWithholding
-            )
-        ) -> (
-            withheld: UInt32,
-            regular: UInt32,
-            supplemental: UInt32,
-            additional: UInt32,
-            rule: AppliedWithholding
-        ) {
-            let additional = min(
-                entry.requestedAdditionalWithholding,
-                gross.saturatingSubtract(base.withheld)
-            )
-            return (
-                base.withheld.saturatingAdd(additional),
-                base.regular,
-                base.supplemental,
-                additional,
-                base.rule
-            )
-        }
-
-        if entry.adjustmentApplies, let percent = adjustmentPercent {
-            let withheld = percentage(gross, percent)
-            return addingRequestedWithholding(
-                (withheld, withheld, 0, .adjustmentPercent(percent))
-            )
-        }
-        if entry.payerRole == .secondary {
-            let withheld = percentage(gross, 30)
-            return addingRequestedWithholding((withheld, withheld, 0, .secondary30))
-        }
-        let column = entry.kind.isPension ? ageGroup.pensionColumn : ageGroup.salaryColumn
-        if entry.kind == .oneTimeSalary {
-            let percent = oneTimeWithholdingRate(column: column, annualIncome: totals.workIncome)
-            let withheld = percentage(gross, percent)
-            return addingRequestedWithholding((withheld, withheld, 0, .oneTimeTable(percent)))
-        }
-        var regularWithheld: UInt32 = 0
-        if entry.kind.isMonthly {
-            for month in 1...12 {
-                regularWithheld = regularWithheld.saturatingAdd(
-                    try tableWithholding(
-                        table: table,
-                        column: column,
-                        income: entry.amount(forMonth: UInt8(month))
-                    )
-                )
-            }
-        } else {
-            regularWithheld = try annualizedTableWithholding(
-                table: table,
-                column: column,
-                annualIncome: entry.annualAmount
-            )
-        }
-        let vacation = entry.vacationCompensationAmount
-        guard vacation > 0 else {
-            return addingRequestedWithholding(
-                (regularWithheld, regularWithheld, 0, .table(column))
-            )
-        }
-        let percent = oneTimeWithholdingRate(column: column, annualIncome: totals.workIncome)
-        let supplementalWithheld = percentage(vacation, percent)
-        return addingRequestedWithholding(
-            (
-                regularWithheld.saturatingAdd(supplementalWithheld),
-                regularWithheld,
-                supplementalWithheld,
-                .tableAndOneTime(column, percent)
-            )
-        )
-    }
 }
 
 struct IncomePlanTotals: Equatable, Sendable {
@@ -851,7 +725,10 @@ struct PlanCalculation: Equatable, Sendable {
     let monthlyIncome: UInt32
     let annualIncome: UInt32
     let ordinaryIncome: UInt32
+    let workIncome: UInt32
+    let pensionIncome: UInt32
     let dividendIncome: UInt32
+    let sgiAnnualRate: UInt32
     let tableDeduction: TaxDeduction
     let annualTax: AnnualTax
     let adjustmentCalibration: AdjustmentCalibration?
@@ -864,78 +741,11 @@ struct PlanCalculation: Equatable, Sendable {
     let vacationPensionPremiums: UInt32
     let salaryExchangeSacrifice: UInt32
     let salaryExchangePensionContributions: UInt32
+    let pensionSalaryBasis: UInt32
     let employerPensionContributions: UInt32
     let marginalRate: Double
     let pensionProgress: IncomeBasisEstimate
     let sgiProgress: IncomeBasisEstimate
-
-    init?(table: UInt8, ageGroup: TaxAgeGroup, plan: IncomePlan) throws {
-        guard plan.isValid else { return nil }
-        let totals = plan.totals
-        annualIncome = totals.grossIncome
-        ordinaryIncome = totals.ordinaryIncome
-        dividendIncome = totals.dividendIncome
-        monthlyIncome = totals.monthlyTaxableIncome
-        guard
-            let tableDeduction = try TaxCalculator.monthlyDeduction(
-                table: table,
-                column: ageGroup.salaryColumn,
-                grossMonthlyIncome: monthlyIncome
-            ),
-            let annualTax = TaxCalculator.calculateAnnualTax(
-                table: table,
-                ageGroup: ageGroup,
-                profile: totals.annualProfile
-            )
-        else { return nil }
-        self.tableDeduction = tableDeduction
-        self.annualTax = annualTax
-
-        if let percent = plan.adjustmentPercent, totals.adjustmentBasisWorkIncome > 0 {
-            let basis = totals.adjustmentBasisWorkIncome
-            guard let formulaAtBasis = TaxCalculator.calculateAnnualTax(
-                table: table,
-                ageGroup: ageGroup,
-                profile: AnnualIncomeProfile(workIncome: basis, pensionIncome: 0)
-            ) else { return nil }
-            let assumed = percentage(basis, percent)
-            let implied = Int64(formulaAtBasis.total) - Int64(assumed)
-            let projected = (Int64(annualTax.total) - implied)
-                .clamped(to: 0...Int64(UInt32.max))
-            adjustmentCalibration = AdjustmentCalibration(
-                basisIncome: basis,
-                percent: percent,
-                formulaTaxAtBasis: formulaAtBasis.total,
-                assumedTaxAtBasis: assumed,
-                impliedTaxAdjustment: implied,
-                projectedOrdinaryTax: UInt32(projected)
-            )
-        } else {
-            adjustmentCalibration = nil
-        }
-        ordinaryFinalTax = adjustmentCalibration?.projectedOrdinaryTax ?? annualTax.total
-        dividendTax = percentage(totals.dividendIncome, qualifiedDividendTaxPercent)
-        totalTax = ordinaryFinalTax.saturatingAdd(dividendTax)
-        withholding = try plan.estimatedWithholding(table: table, ageGroup: ageGroup)
-        withheldTax = withholding.total
-        regularPensionPremiums = totals.regularPensionPremiums
-        vacationPensionPremiums = totals.vacationPensionPremiums
-        salaryExchangeSacrifice = totals.salaryExchangeSacrifice
-        salaryExchangePensionContributions = totals.salaryExchangePensionContributions
-        employerPensionContributions = totals.totalEmployerPensionContributions
-        let upperWork = totals.workIncome.saturatingAdd(12_000)
-        guard let upperTax = TaxCalculator.calculateAnnualTax(
-            table: table,
-            ageGroup: ageGroup,
-            profile: AnnualIncomeProfile(
-                workIncome: upperWork,
-                pensionIncome: totals.pensionIncome
-            )
-        ) else { return nil }
-        marginalRate = (Double(upperTax.total) - Double(annualTax.total)) * 100 / 12_000
-        pensionProgress = IncomeBasisCalculator.publicPensionProgressForIncome(totals.workIncome)
-        sgiProgress = IncomeBasisCalculator.estimatedSGIProgressForIncome(totals.sgiAnnualRate)
-    }
 
     var tableReferenceTax: UInt32 {
         switch tableDeduction.kind {
@@ -954,58 +764,6 @@ struct PlanCalculation: Equatable, Sendable {
     var taxBalance: Int64 { Int64(totalTax) - Int64(withheldTax) }
 }
 
-func oneTimeWithholdingRate(column: TaxColumn, annualIncome: UInt32) -> UInt32 {
-    let thresholds: [(UInt32, UInt32)]
-    switch column {
-    case .column1:
-        thresholds = [(25_041, 0), (82_800, 10), (192_000, 21), (477_600, 26),
-                      (660_000, 34), (.max, 54)]
-    case .column2:
-        thresholds = [(65_800, 0), (477_600, 26), (660_000, 34), (.max, 55)]
-    case .column3:
-        thresholds = [(25_041, 0), (331_200, 10), (477_600, 26), (660_000, 34),
-                      (.max, 55)]
-    case .column4:
-        thresholds = [(25_041, 0), (54_000, 3), (192_000, 22), (660_000, 26),
-                      (.max, 46)]
-    case .column5:
-        thresholds = [(25_041, 0), (32_400, 10), (160_800, 29), (184_800, 34),
-                      (660_000, 38), (.max, 54)]
-    case .column6:
-        thresholds = [(25_041, 0), (160_800, 29), (184_800, 34), (660_000, 38),
-                      (.max, 54)]
-    }
-    return thresholds.first(where: { annualIncome <= $0.0 })?.1 ?? 0
-}
-
-private func tableWithholding(
-    table: UInt8,
-    column: TaxColumn,
-    income: UInt32
-) throws -> UInt32 {
-    guard let deduction = try TaxCalculator.monthlyDeduction(
-        table: table,
-        column: column,
-        grossMonthlyIncome: income
-    ) else { return 0 }
-    return deduction.kind == .amount ? deduction.value : percentage(income, deduction.value)
-}
-
-private func annualizedTableWithholding(
-    table: UInt8,
-    column: TaxColumn,
-    annualIncome: UInt32
-) throws -> UInt32 {
-    guard let deduction = try TaxCalculator.monthlyDeduction(
-        table: table,
-        column: column,
-        grossMonthlyIncome: annualIncome / 12
-    ) else { return 0 }
-    return deduction.kind == .amount
-        ? deduction.value.saturatingMultiply(12)
-        : percentage(annualIncome, deduction.value)
-}
-
 private func percentage(_ amount: UInt32, _ percent: UInt32) -> UInt32 {
     UInt32(min(UInt64(amount) * UInt64(percent) / 100, UInt64(UInt32.max)))
 }
@@ -1015,10 +773,4 @@ private func roundedBasisPoints(_ amount: UInt32, _ basisPoints: UInt32) -> UInt
         (UInt64(amount) * UInt64(basisPoints) + 5_000) / 10_000,
         UInt64(UInt32.max)
     ))
-}
-
-private extension Comparable {
-    func clamped(to range: ClosedRange<Self>) -> Self {
-        min(max(self, range.lowerBound), range.upperBound)
-    }
 }

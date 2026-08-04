@@ -1,5 +1,7 @@
 import Foundation
 
+let supportedTaxTables: ClosedRange<UInt8> = 29...42
+
 enum TaxColumn: UInt8, CaseIterable, Identifiable, Sendable {
     case column1 = 1
     case column2
@@ -105,81 +107,19 @@ struct AnnualTax: Equatable, Sendable {
     let total: UInt32
 }
 
-enum IncomePeriod: String, CaseIterable, Identifiable, Sendable {
-    case monthly = "Monthly"
-    case annual = "Annual"
+struct IncomeBasisProgress: Equatable, Sendable {
+    let estimatedBasis: UInt32
+    let maximumBasis: UInt32
 
-    var id: Self { self }
+    var percentOfMaximum: Double {
+        Double(estimatedBasis) * 100 / Double(maximumBasis)
+    }
 }
 
-struct TaxCalculation: Equatable, Sendable {
-    let monthlyIncome: UInt32
-    let annualIncome: UInt32
-    let tableDeduction: TaxDeduction
-    let annualTax: AnnualTax
-    let marginalRate: Double
-    let pensionProgress: IncomeBasisEstimate
-    let sgiProgress: IncomeBasisEstimate
-
-    init?(
-        table: UInt8,
-        column: TaxColumn,
-        period: IncomePeriod,
-        income: UInt32
-    ) throws {
-        switch period {
-        case .monthly:
-            monthlyIncome = income
-            annualIncome = UInt32(
-                min(UInt64(income) * 12, UInt64(UInt32.max))
-            )
-        case .annual:
-            monthlyIncome = income / 12
-            annualIncome = income
-        }
-
-        guard
-            let deduction = try TaxCalculator.monthlyDeduction(
-                table: table,
-                column: column,
-                grossMonthlyIncome: monthlyIncome
-            ),
-            let annualTax = TaxCalculator.calculateAnnualTax(
-                table: table,
-                column: column,
-                grossYearlyIncome: annualIncome
-            ),
-            let marginalRate = TaxCalculator.calculateMarginalRate(
-                table: table,
-                column: column,
-                monthlyIncome: monthlyIncome
-            )
-        else {
-            return nil
-        }
-
-        tableDeduction = deduction
-        self.annualTax = annualTax
-        self.marginalRate = marginalRate
-        pensionProgress = IncomeBasisCalculator.publicPensionProgress(
-            column: column,
-            grossYearlyIncome: annualIncome
-        )
-        sgiProgress = IncomeBasisCalculator.estimatedSGIProgress(
-            column: column,
-            grossYearlyIncome: annualIncome
-        )
-    }
-
-    var formulaMonthlyTax: UInt32 { annualTax.total / 12 }
-
-    var formulaMonthlyNet: UInt32 {
-        monthlyIncome > formulaMonthlyTax ? monthlyIncome - formulaMonthlyTax : 0
-    }
-
-    var effectiveRate: Double {
-        annualIncome == 0 ? 0 : Double(annualTax.total) * 100 / Double(annualIncome)
-    }
+enum IncomeBasisEstimate: Equatable, Sendable {
+    case estimated(IncomeBasisProgress)
+    case notBasedOnSelectedIncome
+    case requiresAdditionalInformation
 }
 
 extension UInt32 {

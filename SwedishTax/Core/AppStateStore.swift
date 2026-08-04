@@ -40,7 +40,7 @@ struct AppStateStore: Sendable {
         guard state.version == PersistedAppState.currentVersion else {
             throw AppStateStoreError.unsupportedVersion(state.version)
         }
-        guard (TaxCalculator.minTaxTable...TaxCalculator.maxTaxTable).contains(state.table) else {
+        guard supportedTaxTables.contains(state.table) else {
             throw AppStateStoreError.invalidTaxTable(state.table)
         }
         return state

@@ -18,6 +18,13 @@
 		B0000000000000000000000F /* DividendAllowance.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000000F /* DividendAllowance.swift */; };
 		B00000000000000000000010 /* RustTaxCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000010 /* RustTaxCore.swift */; };
 		B00000000000000000000011 /* SwedishTaxCore.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = A00000000000000000000011 /* SwedishTaxCore.xcframework */; };
+		B00000000000000000000012 /* IncomeEntryViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000012 /* IncomeEntryViews.swift */; };
+		B00000000000000000000013 /* CalculationTraceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000013 /* CalculationTraceView.swift */; };
+		B00000000000000000000014 /* HelpViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000014 /* HelpViews.swift */; };
+		B00000000000000000000015 /* FormComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000015 /* FormComponents.swift */; };
+		B00000000000000000000016 /* CardsAndRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000016 /* CardsAndRows.swift */; };
+		B00000000000000000000017 /* Formatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000017 /* Formatting.swift */; };
+		B00000000000000000000018 /* TaxTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000018 /* TaxTheme.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -44,6 +51,13 @@
 		A0000000000000000000000F /* DividendAllowance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DividendAllowance.swift; sourceTree = "<group>"; };
 		A00000000000000000000010 /* RustTaxCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustTaxCore.swift; sourceTree = "<group>"; };
 		A00000000000000000000011 /* SwedishTaxCore.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = SwedishTaxCore.xcframework; sourceTree = RUST_CORE_ARTIFACTS_DIR; };
+		A00000000000000000000012 /* IncomeEntryViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IncomeEntryViews.swift; sourceTree = "<group>"; };
+		A00000000000000000000013 /* CalculationTraceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalculationTraceView.swift; sourceTree = "<group>"; };
+		A00000000000000000000014 /* HelpViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelpViews.swift; sourceTree = "<group>"; };
+		A00000000000000000000015 /* FormComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FormComponents.swift; sourceTree = "<group>"; };
+		A00000000000000000000016 /* CardsAndRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardsAndRows.swift; sourceTree = "<group>"; };
+		A00000000000000000000017 /* Formatting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Formatting.swift; sourceTree = "<group>"; };
+		A00000000000000000000018 /* TaxTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaxTheme.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -91,8 +105,39 @@
 			children = (
 				A00000000000000000000001 /* SwedishTaxApp.swift */,
 				A00000000000000000000002 /* ContentView.swift */,
+				D0000000000000000000000A /* Features */,
+				D0000000000000000000000B /* Components */,
+				D0000000000000000000000C /* Support */,
 			);
 			path = App;
+			sourceTree = "<group>";
+		};
+		D0000000000000000000000A /* Features */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000012 /* IncomeEntryViews.swift */,
+				A00000000000000000000013 /* CalculationTraceView.swift */,
+				A00000000000000000000014 /* HelpViews.swift */,
+			);
+			path = Features;
+			sourceTree = "<group>";
+		};
+		D0000000000000000000000B /* Components */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000015 /* FormComponents.swift */,
+				A00000000000000000000016 /* CardsAndRows.swift */,
+			);
+			path = Components;
+			sourceTree = "<group>";
+		};
+		D0000000000000000000000C /* Support */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000017 /* Formatting.swift */,
+				A00000000000000000000018 /* TaxTheme.swift */,
+			);
+			path = Support;
 			sourceTree = "<group>";
 		};
 		D00000000000000000000005 /* Core */ = {
@@ -244,6 +289,13 @@
 				B00000000000000000000001 /* SwedishTaxApp.swift in Sources */,
 				B00000000000000000000010 /* RustTaxCore.swift in Sources */,
 				B00000000000000000000002 /* ContentView.swift in Sources */,
+				B00000000000000000000012 /* IncomeEntryViews.swift in Sources */,
+				B00000000000000000000013 /* CalculationTraceView.swift in Sources */,
+				B00000000000000000000014 /* HelpViews.swift in Sources */,
+				B00000000000000000000015 /* FormComponents.swift in Sources */,
+				B00000000000000000000016 /* CardsAndRows.swift in Sources */,
+				B00000000000000000000017 /* Formatting.swift in Sources */,
+				B00000000000000000000018 /* TaxTheme.swift in Sources */,
 				B0000000000000000000000E /* AppStateStore.swift in Sources */,
 				B00000000000000000000003 /* TaxModels.swift in Sources */,
 				B0000000000000000000000C /* IncomePlan.swift in Sources */,

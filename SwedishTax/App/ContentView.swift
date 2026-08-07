@@ -16,13 +16,37 @@ private enum CalculationState {
 
 struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
-    @State private var table: UInt8
-    @State private var ageGroup: TaxAgeGroup
-    @State private var plan: IncomePlan
+    @State private var workspace: PersistedWorkspace
     @State private var editingEntryID: UInt64?
     @State private var helpTopic: HelpTopic?
     @State private var showingAbout = false
     @State private var showingTrace = false
+    @State private var showingRename = false
+    @State private var renameText = ""
+    @State private var showingDeleteConfirmation = false
+
+    private var selectedDocument: CalculationDocument { workspace.selectedDocument }
+    private var table: UInt8 { selectedDocument.table }
+    private var ageGroup: TaxAgeGroup { selectedDocument.ageGroup }
+    private var plan: IncomePlan { selectedDocument.plan }
+
+    private var selectedDocumentBinding: Binding<CalculationDocument> {
+        Binding(
+            get: { workspace.selectedDocument },
+            set: { updatedDocument in
+                guard let index = workspace.documents.firstIndex(where: {
+                    $0.id == workspace.selectedDocumentID
+                }) else { return }
+                var updatedDocument = updatedDocument
+                updatedDocument.modifiedAt = Date()
+                workspace.documents[index] = updatedDocument
+            }
+        )
+    }
+
+    private var tableBinding: Binding<UInt8> { selectedDocumentBinding.table }
+    private var ageGroupBinding: Binding<TaxAgeGroup> { selectedDocumentBinding.ageGroup }
+    private var planBinding: Binding<IncomePlan> { selectedDocumentBinding.plan }
 
     private var calculationState: CalculationState {
         if let issue = plan.validationIssue {
@@ -40,21 +64,14 @@ struct ContentView: View {
         }
     }
 
-    private var persistedState: PersistedAppState {
-        PersistedAppState(table: table, ageGroup: ageGroup, plan: plan)
-    }
-
     init() {
-        let restored: PersistedAppState? = try? AppStateStore.live.load()
-        let state = restored ?? PersistedAppState()
-        _table = State(initialValue: state.table)
-        _ageGroup = State(initialValue: state.ageGroup)
-        _plan = State(initialValue: state.plan)
+        let restored = try? AppStateStore.live.load()
+        _workspace = State(initialValue: restored ?? PersistedWorkspace())
     }
 
     var body: some View {
         let calculationState = calculationState
-        let stateToPersist = persistedState
+        let workspaceToPersist = workspace
         NavigationStack {
             ScrollView {
                 LazyVStack(spacing: 16) {
@@ -84,9 +101,12 @@ struct ContentView: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .background(Color.taxBackground)
-            .navigationTitle("Swedish Tax")
+            .navigationTitle(selectedDocument.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    documentMenu
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("About", systemImage: "info.circle") { showingAbout = true }
                 }
@@ -107,7 +127,7 @@ struct ContentView: View {
             )) {
                 if let editingEntryID {
                     IncomeEntryEditor(
-                        plan: $plan,
+                        plan: planBinding,
                         entryID: editingEntryID,
                         table: table,
                         ageGroup: ageGroup
@@ -123,21 +143,103 @@ struct ContentView: View {
                     )
                 }
             }
+            .alert("Rename calculation", isPresented: $showingRename) {
+                TextField("Name", text: $renameText)
+                Button("Cancel", role: .cancel) {}
+                Button("Rename") {
+                    workspace.renameSelectedDocument(to: renameText)
+                }
+                .disabled(renameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            .confirmationDialog(
+                "Delete \(selectedDocument.name)?",
+                isPresented: $showingDeleteConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Delete calculation", role: .destructive) {
+                    endDocumentPresentation()
+                    workspace.deleteDocument(id: workspace.selectedDocumentID)
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This calculation cannot be recovered.")
+            }
         }
-        .task(id: stateToPersist) {
+        .task(id: workspaceToPersist) {
             do {
                 try await Task.sleep(for: .milliseconds(350))
-                try AppStateStore.live.save(stateToPersist)
+                try AppStateStore.live.save(workspaceToPersist)
             } catch is CancellationError {
                 // A newer edit superseded this pending save.
             } catch {
-                assertionFailure("Unable to save income plan: \(error)")
+                assertionFailure("Unable to save calculation workspace: \(error)")
             }
         }
         .onChange(of: scenePhase) { _, phase in
             guard phase != .active else { return }
-            try? AppStateStore.live.save(persistedState)
+            try? AppStateStore.live.save(workspace)
         }
+    }
+
+    private var documentMenu: some View {
+        Menu {
+            Section("Calculations") {
+                ForEach(workspace.documents) { document in
+                    Button {
+                        switchDocument(to: document.id)
+                    } label: {
+                        Label(
+                            document.name,
+                            systemImage: document.id == workspace.selectedDocumentID
+                                ? "checkmark.circle.fill"
+                                : "doc"
+                        )
+                    }
+                }
+            }
+
+            Section {
+                Button("New calculation", systemImage: "doc.badge.plus") {
+                    endDocumentPresentation()
+                    workspace.createDocument()
+                }
+                Button("Duplicate calculation", systemImage: "plus.square.on.square") {
+                    endDocumentPresentation()
+                    workspace.duplicateSelectedDocument()
+                }
+                Button("Rename calculation", systemImage: "pencil") {
+                    renameText = selectedDocument.name
+                    showingRename = true
+                }
+                if workspace.documents.count > 1 {
+                    Button("Delete calculation", systemImage: "trash", role: .destructive) {
+                        showingDeleteConfirmation = true
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "doc.on.doc")
+        }
+        .accessibilityLabel("Switch calculation")
+    }
+
+    private func switchDocument(to id: UUID) {
+        guard id != workspace.selectedDocumentID else { return }
+        endDocumentPresentation()
+        workspace.selectDocument(id: id)
+    }
+
+    private func endDocumentPresentation() {
+        editingEntryID = nil
+        showingTrace = false
+    }
+
+    @discardableResult
+    private func updatePlan<Result>(_ update: (inout IncomePlan) -> Result) -> Result {
+        var updatedPlan = plan
+        let result = update(&updatedPlan)
+        planBinding.wrappedValue = updatedPlan
+        return result
     }
 
     private var hero: some View {
@@ -181,7 +283,7 @@ struct ContentView: View {
                 FieldLabel("Tax table")
                 HelpButton { helpTopic = .table }
             }
-            Picker("Tax table", selection: $table) {
+            Picker("Tax table", selection: tableBinding) {
                 ForEach(supportedTaxTables, id: \.self) {
                     Text("Table \($0)").tag($0)
                 }
@@ -196,7 +298,7 @@ struct ContentView: View {
                 FieldLabel("Age at start of 2026")
                 HelpButton { helpTopic = .age }
             }
-            Picker("Age at start of 2026", selection: $ageGroup) {
+            Picker("Age at start of 2026", selection: ageGroupBinding) {
                 ForEach(TaxAgeGroup.allCases) { Text($0.rawValue).tag($0) }
             }
             .pickerStyle(.menu)
@@ -215,7 +317,7 @@ struct ContentView: View {
                     Menu {
                         ForEach(IncomeKind.allCases) { kind in
                             Button(kind.shortTitle) {
-                                editingEntryID = plan.addEntry(kind: kind)
+                                editingEntryID = updatePlan { $0.addEntry(kind: kind) }
                             }
                         }
                     } label: {
@@ -271,14 +373,16 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Toggle("Use a percentage jämkning decision", isOn: Binding(
                         get: { plan.adjustmentPercent != nil },
-                        set: { plan.setAdjustmentEnabled($0) }
+                        set: { enabled in updatePlan { $0.setAdjustmentEnabled(enabled) } }
                     ))
                     if plan.adjustmentPercent != nil {
                         PercentageStepper(
                             title: "Decision withholding",
                             value: Binding(
                                 get: { plan.adjustmentPercent ?? 30 },
-                                set: { plan.adjustmentPercent = min($0, 100) }
+                                set: { percent in
+                                    updatePlan { $0.adjustmentPercent = min(percent, 100) }
+                                }
                             )
                         )
                         Label(
@@ -515,41 +619,41 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Toggle(
                         "One-person company — marked salary is total payroll",
-                        isOn: $plan.dividendAllowance.onePersonCompany
+                        isOn: planBinding.dividendAllowance.onePersonCompany
                     )
                     BasisPointsPercentageField(
                         title: "Your ownership",
-                        basisPoints: $plan.dividendAllowance.ownershipBasisPoints
+                        basisPoints: planBinding.dividendAllowance.ownershipBasisPoints
                     )
                     BasisPointsPercentageField(
                         title: "Spouse ownership",
-                        basisPoints: $plan.dividendAllowance.spouseOwnershipBasisPoints
+                        basisPoints: planBinding.dividendAllowance.spouseOwnershipBasisPoints
                     )
                     BasisPointsPercentageField(
                         title: "Your ownership in other qualified companies",
-                        basisPoints: $plan.dividendAllowance.otherQualifiedOwnershipBasisPoints,
+                        basisPoints: planBinding.dividendAllowance.otherQualifiedOwnershipBasisPoints,
                         maximumBasisPoints: 1_000_000
                     )
                     if !plan.dividendAllowance.onePersonCompany {
                         UIntField(
                             title: "Company/group payroll in 2026",
-                            value: $plan.dividendAllowance.companyCashPayroll2026,
+                            value: planBinding.dividendAllowance.companyCashPayroll2026,
                             suffix: "SEK"
                         )
                         UIntField(
                             title: "Highest related person's salary",
-                            value: $plan.dividendAllowance.highestRelatedCashSalary2026,
+                            value: planBinding.dividendAllowance.highestRelatedCashSalary2026,
                             suffix: "SEK"
                         )
                     }
                     UIntField(
                         title: "Acquisition cost",
-                        value: $plan.dividendAllowance.acquisitionCost,
+                        value: planBinding.dividendAllowance.acquisitionCost,
                         suffix: "SEK"
                     )
                     UIntField(
                         title: "Saved allowance",
-                        value: $plan.dividendAllowance.savedAllowance,
+                        value: planBinding.dividendAllowance.savedAllowance,
                         suffix: "SEK"
                     )
 

@@ -279,7 +279,7 @@ final class TaxCalculatorTests: XCTestCase {
         XCTAssertEqual(allowance.maximumSacrifice, 168_012)
     }
 
-    func testPersistedAppStateRoundTripsTheCompletePlan() throws {
+    func testPersistedWorkspaceRoundTripsMultipleCompleteCalculations() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -298,13 +298,141 @@ final class TaxCalculatorTests: XCTestCase {
         plan.entries[pensionIndex].amount = 27_500
         plan.entries[pensionIndex].start = Date2026(month: 8, day: 1)
 
-        let expected = PersistedAppState(
+        let firstDate = Date(timeIntervalSinceReferenceDate: 1_000)
+        let secondDate = Date(timeIntervalSinceReferenceDate: 2_000)
+        let first = CalculationDocument(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            name: "Current employment",
+            createdAt: firstDate,
             table: 34,
             ageGroup: .atLeast66,
             plan: plan
         )
+        let second = CalculationDocument(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+            name: "Pension scenario",
+            createdAt: secondDate,
+            table: 32,
+            ageGroup: .under66,
+            plan: IncomePlan(annualSalary: 720_000)
+        )
+        let expected = PersistedWorkspace(
+            selectedDocumentID: second.id,
+            documents: [first, second]
+        )
         try store.save(expected)
         XCTAssertEqual(try store.load(), expected)
+    }
+
+    func testStoreMigratesTheVersionOneSingleCalculationDocument() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("income-plan.json")
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+
+        var legacyPlan = IncomePlan(monthlySalary: 72_500)
+        legacyPlan.adjustmentPercent = 27
+        let legacyDocument: [String: Any] = [
+            "version": 1,
+            "table": 35,
+            "ageGroup": TaxAgeGroup.atLeast66.rawValue,
+            "plan": try XCTUnwrap(
+                JSONSerialization.jsonObject(with: JSONEncoder().encode(legacyPlan))
+            )
+        ]
+        try JSONSerialization.data(withJSONObject: legacyDocument).write(to: fileURL)
+
+        let migrated = try XCTUnwrap(AppStateStore(fileURL: fileURL).load())
+        XCTAssertEqual(migrated.version, PersistedWorkspace.currentVersion)
+        XCTAssertEqual(migrated.documents.count, 1)
+        XCTAssertEqual(migrated.selectedDocument.name, "My calculation")
+        XCTAssertEqual(migrated.selectedDocument.table, 35)
+        XCTAssertEqual(migrated.selectedDocument.ageGroup, .atLeast66)
+        XCTAssertEqual(migrated.selectedDocument.plan, legacyPlan)
+    }
+
+    func testStoreRejectsUnsupportedVersionsAndDuplicateDocumentIDs() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = AppStateStore(fileURL: directory.appendingPathComponent("income-plan.json"))
+
+        XCTAssertThrowsError(try store.save(PersistedWorkspace(version: 99))) { error in
+            XCTAssertEqual(error as? AppStateStoreError, .unsupportedVersion(99))
+        }
+
+        let document = CalculationDocument()
+        let duplicateIDs = PersistedWorkspace(documents: [document, document])
+        XCTAssertThrowsError(try store.save(duplicateIDs)) { error in
+            XCTAssertEqual(error as? AppStateStoreError, .invalidWorkspace)
+        }
+    }
+
+    func testWorkspaceCanSwitchBetweenIndependentCalculations() throws {
+        let first = CalculationDocument(
+            name: "Salary",
+            table: 34,
+            ageGroup: .under66,
+            plan: IncomePlan(monthlySalary: 70_000)
+        )
+        let second = CalculationDocument(
+            name: "Pension",
+            table: 31,
+            ageGroup: .atLeast66,
+            plan: IncomePlan(annualSalary: 480_000)
+        )
+        var workspace = PersistedWorkspace(
+            selectedDocumentID: first.id,
+            documents: [first, second]
+        )
+
+        XCTAssertEqual(workspace.selectedDocument, first)
+        XCTAssertTrue(workspace.selectDocument(id: second.id))
+        XCTAssertEqual(workspace.selectedDocument, second)
+        XCTAssertFalse(workspace.selectDocument(id: UUID()))
+        XCTAssertEqual(workspace.selectedDocument, second)
+    }
+
+    func testWorkspaceCreatesDuplicatesRenamesAndDeletesCalculations() throws {
+        let date = Date(timeIntervalSinceReferenceDate: 1_000)
+        var workspace = PersistedWorkspace(documents: [
+            CalculationDocument(
+                name: "Baseline",
+                createdAt: date,
+                table: 35,
+                plan: IncomePlan(monthlySalary: 88_000)
+            )
+        ])
+        let baseline = workspace.selectedDocument
+
+        let duplicateID = workspace.duplicateSelectedDocument(date: date.addingTimeInterval(1))
+        let duplicate = workspace.selectedDocument
+        XCTAssertNotEqual(duplicateID, baseline.id)
+        XCTAssertEqual(duplicate.name, "Baseline copy")
+        XCTAssertEqual(duplicate.table, baseline.table)
+        XCTAssertEqual(duplicate.ageGroup, baseline.ageGroup)
+        XCTAssertEqual(duplicate.plan, baseline.plan)
+
+        XCTAssertTrue(workspace.renameSelectedDocument(
+            to: "  Higher salary  ",
+            date: date.addingTimeInterval(2)
+        ))
+        XCTAssertEqual(workspace.selectedDocument.name, "Higher salary")
+        XCTAssertFalse(workspace.renameSelectedDocument(to: "   "))
+
+        let newID = workspace.createDocument(date: date.addingTimeInterval(3))
+        XCTAssertEqual(workspace.selectedDocumentID, newID)
+        XCTAssertEqual(workspace.selectedDocument.name, "Calculation 3")
+        XCTAssertTrue(workspace.deleteDocument(id: newID))
+        XCTAssertEqual(workspace.selectedDocumentID, duplicateID)
+        XCTAssertTrue(workspace.deleteDocument(id: duplicateID))
+        XCTAssertEqual(workspace.selectedDocumentID, baseline.id)
+        XCTAssertFalse(workspace.deleteDocument(id: baseline.id))
+        XCTAssertEqual(workspace.documents.count, 1)
     }
 
     func testPersistedPlanWithoutNewFieldsStillDecodes() throws {

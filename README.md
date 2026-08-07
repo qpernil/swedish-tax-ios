@@ -16,6 +16,8 @@ bases, withholding, pension calculations, and complete plan results.
 - Annual salary, monthly salary, one-time salary, monthly or annual
   occupational pension, and own-company dividends.
 - Multiple income entries with exact 2026 start and end dates.
+- Multiple named calculations with switching, duplication, renaming, and
+  deletion.
 - Main-payer table withholding, secondary-payer 30% withholding, and voluntary
   additional withholding in SEK per payment.
 - Jämkning as an adjustable percentage, selectable per payer, with optional
@@ -26,8 +28,8 @@ bases, withholding, pension calculations, and complete plan results.
   and salary exchange with employer uplift and allowance validation.
 - Annual final-tax and preliminary-withholding reconciliation, expected
   balance, marginal tax, PGI progress, SGI progress, and calculation trace.
-- Complete local persistence of the selected table, age group, adjustment, and
-  income plan.
+- Complete local persistence of every named calculation and the current
+  selection.
 
 If a salary-exchange amount becomes too high after another pension value is
 changed, the plan is marked invalid and shows the newly permitted maximum.
@@ -132,13 +134,14 @@ protects the official file against accidental edits.
 
 ## Persistence and privacy
 
-The app saves a versioned JSON document in its Application Support directory.
-It contains the complete income plan and tax settings and uses iOS complete
-file protection. No income data is transmitted, and the app has no runtime
-network integration.
+The app saves a versioned JSON workspace in its Application Support directory.
+It contains every named calculation, each complete income plan and its tax
+settings, and the current selection. The workspace uses iOS complete file
+protection. No income data is transmitted, and the app has no runtime network
+integration.
 
-Deleting the app also deletes this locally stored plan. There is currently no
-iCloud synchronization or plan export.
+Deleting the app also deletes these locally stored calculations. There is
+currently no iCloud synchronization or calculation export.
 
 ## Project structure
 

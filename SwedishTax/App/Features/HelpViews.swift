@@ -61,10 +61,13 @@ struct AboutView: View {
                 }
                 Section("Important") {
                     Text("This is a preliminary calculation using published-table assumptions. It is not an individualized final tax, pension, SGI, or salary-exchange assessment.")
+                    Text("The preliminary 2027 dividend allowance applies the enacted formula to the official 2026 income base amount. Any acquisition-cost interest requires the government borrowing rate set on 30 November 2026.")
                 }
                 Section("Official sources") {
                     Link("SKV 433 technical specification", destination: URL(string: "https://www.skatteverket.se/download/18.1522bf3f19aea8075ba55c/1766385913260/teknisk-beskrivning-skv-433-2026-utgava-36.pdf")!)
                     Link("Skatteverket monthly tables", destination: URL(string: "https://www.skatteverket.se/download/18.1522bf3f19aea8075ba5af/1765287119989/allmanna-tabeller-manad.txt")!)
+                    Link("Closely held company dividend rules", destination: URL(string: "https://www.skatteverket.se/foretag/drivaforetag/foretagsformer/famansforetag/andradereglerinforinkomstdeklarationen2027.4.4a54dc8b19aa6175a152359.html")!)
+                    Link("2026 amounts and income base amount", destination: URL(string: "https://www.skatteverket.se/foretag/skatterochavdrag/beloppochprocent/2026.106.1522bf3f19aea8075ba3294.html")!)
                     Link("2026 pensionable income (PGI)", destination: URL(string: "https://www.skatteverket.se/privat/skatter/arbeteochinkomst/pensionsgrundandeinkomstpgi.4.4f3d00a710cc9ae1c9c80008300.html")!)
                     Link("Sickness-benefit qualifying income (SGI)", destination: URL(string: "https://www.forsakringskassan.se/privatperson/sjukpenninggrundande-inkomst-sgi")!)
                 }

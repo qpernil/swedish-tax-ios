@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 import XCTest
 @testable import SwedishTax
 
@@ -461,6 +462,105 @@ final class TaxCalculatorTests: XCTestCase {
         XCTAssertEqual(parseBasisPointsPercentage(".5"), 50)
         XCTAssertEqual(parseBasisPointsPercentage("5."), 500)
         XCTAssertNil(parseBasisPointsPercentage("5.123"))
+    }
+
+    @MainActor
+    func testPDFReportContainsExpandedSectionsAndEscapesUserText() throws {
+        let fixture = try pdfReportFixture()
+        let html = fixture.report.html
+
+        XCTAssertTrue(html.contains("Quarterly &lt;plan&gt; &amp; review"))
+        XCTAssertTrue(html.contains("Employer &amp; Partners"))
+        XCTAssertTrue(html.contains("All entries and options expanded"))
+        XCTAssertTrue(html.contains("Monthly table reference"))
+        XCTAssertTrue(html.contains("Income-basis ceilings"))
+        XCTAssertTrue(html.contains("Annual tax projection breakdown"))
+        XCTAssertTrue(html.contains("Preliminary 2027 dividend allowance"))
+        XCTAssertTrue(html.contains("All five steps expanded"))
+        XCTAssertTrue(html.contains("Official sources"))
+        XCTAssertTrue(html.contains("SKV 433 technical specification, edition 36 (2026)"))
+        XCTAssertTrue(html.contains("Skatteverket closely held company dividend rules (2026 reform)"))
+        XCTAssertTrue(html.contains("Skatteverket 2026 amounts and percentages (income base amount)"))
+        XCTAssertTrue(html.contains("preliminary 2027 dividend allowance"))
+        XCTAssertTrue(html.contains("(https://www.skatteverket.se/download/"))
+        XCTAssertTrue(html.contains("Försäkringskassan sickness-benefit qualifying income (SGI)"))
+        XCTAssertFalse(html.contains("DisclosureGroup"))
+    }
+
+    @MainActor
+    func testPDFReportCreatesPaginatedA4Document() throws {
+        let fixture = try pdfReportFixture()
+        let data = try fixture.report.pdfData()
+
+        XCTAssertTrue(data.starts(with: Data("%PDF".utf8)))
+        let provider = try XCTUnwrap(CGDataProvider(data: data as CFData))
+        let pdf = try XCTUnwrap(CGPDFDocument(provider))
+        XCTAssertGreaterThanOrEqual(pdf.numberOfPages, 3)
+
+        let firstPage = try XCTUnwrap(pdf.page(at: 1))
+        let mediaBox = firstPage.getBoxRect(.mediaBox)
+        XCTAssertEqual(mediaBox.width, 595.28, accuracy: 0.5)
+        XCTAssertEqual(mediaBox.height, 841.89, accuracy: 0.5)
+
+        let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "com.adobe.pdf")
+        attachment.name = "Swedish-Tax-Expanded-Report-QA.pdf"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    @MainActor
+    private func pdfReportFixture() throws -> (
+        report: CalculationPDFReport,
+        calculation: PlanCalculation
+    ) {
+        var plan = IncomePlan(monthlySalary: 93_000)
+        plan.entries[0].description = "Employer & Partners"
+        plan.entries[0].end = Date2026(month: 10, day: 18)
+        plan.entries[0].setVacationAnnualEntitlementDays(30)
+        plan.entries[0].adjustmentApplies = true
+        plan.entries[0].useFullYearProjectionAsAdjustmentBasis = true
+        plan.adjustmentPercent = 33
+
+        let oneTimeID = plan.addEntry(kind: .oneTimeSalary)
+        let oneTimeIndex = try XCTUnwrap(plan.entries.firstIndex { $0.id == oneTimeID })
+        plan.entries[oneTimeIndex].description = "Retention payment"
+        plan.entries[oneTimeIndex].amount = 125_000
+        plan.entries[oneTimeIndex].additionalWithholdingPerPayment = 2_500
+
+        let pensionID = plan.addEntry(kind: .monthlyOccupationalPension)
+        let pensionIndex = try XCTUnwrap(plan.entries.firstIndex { $0.id == pensionID })
+        plan.entries[pensionIndex].description = "Occupational pension"
+        plan.entries[pensionIndex].amount = 27_500
+        plan.entries[pensionIndex].start = Date2026(month: 8, day: 1)
+        plan.entries[pensionIndex].setPayerRole(.secondary, adjustmentAvailable: true)
+
+        let dividendID = plan.addEntry(kind: .ownCompanyDividend)
+        let dividendIndex = try XCTUnwrap(plan.entries.firstIndex { $0.id == dividendID })
+        plan.entries[dividendIndex].description = "Dividend from Example AB"
+        plan.entries[dividendIndex].amount = 78_000
+
+        let calculation = try RustTaxCore.planCalculation(
+            table: 32,
+            ageGroup: .under66,
+            plan: plan
+        )
+        let fixedDate = Date(timeIntervalSince1970: 1_767_268_800)
+        let document = CalculationDocument(
+            name: "Quarterly <plan> & review",
+            createdAt: fixedDate,
+            modifiedAt: fixedDate,
+            table: 32,
+            ageGroup: .under66,
+            plan: plan
+        )
+        return (
+            CalculationPDFReport(
+                document: document,
+                calculation: calculation,
+                generatedAt: fixedDate
+            ),
+            calculation
+        )
     }
 
     private func withholdingRow(

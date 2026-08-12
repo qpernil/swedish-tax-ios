@@ -24,6 +24,8 @@ struct ContentView: View {
     @State private var showingRename = false
     @State private var renameText = ""
     @State private var showingDeleteConfirmation = false
+    @State private var exportedPDFReport: ExportedPDFReport?
+    @State private var pdfExportError: PDFExportError?
 
     private var selectedDocument: CalculationDocument { workspace.selectedDocument }
     private var table: UInt8 { selectedDocument.table }
@@ -143,6 +145,9 @@ struct ContentView: View {
                     )
                 }
             }
+            .sheet(item: $exportedPDFReport) { report in
+                PDFShareSheet(report: report)
+            }
             .alert("Rename calculation", isPresented: $showingRename) {
                 TextField("Name", text: $renameText)
                 Button("Cancel", role: .cancel) {}
@@ -163,6 +168,13 @@ struct ContentView: View {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("This calculation cannot be recovered.")
+            }
+            .alert(item: $pdfExportError) { failure in
+                Alert(
+                    title: Text("Unable to export PDF"),
+                    message: Text(failure.message),
+                    dismissButton: .default(Text("OK"))
+                )
             }
         }
         .task(id: workspaceToPersist) {
@@ -207,6 +219,10 @@ struct ContentView: View {
                     endDocumentPresentation()
                     workspace.duplicateSelectedDocument()
                 }
+                Button("Export PDF", systemImage: "square.and.arrow.up") {
+                    exportSelectedDocumentPDF()
+                }
+                .disabled(calculationState.calculation == nil)
                 Button("Rename calculation", systemImage: "pencil") {
                     renameText = selectedDocument.name
                     showingRename = true
@@ -232,6 +248,20 @@ struct ContentView: View {
     private func endDocumentPresentation() {
         editingEntryID = nil
         showingTrace = false
+    }
+
+    @MainActor
+    private func exportSelectedDocumentPDF() {
+        guard let calculation = calculationState.calculation else { return }
+        do {
+            let report = CalculationPDFReport(
+                document: selectedDocument,
+                calculation: calculation
+            )
+            exportedPDFReport = ExportedPDFReport(url: try report.writeToTemporaryFile())
+        } catch {
+            pdfExportError = PDFExportError(message: error.localizedDescription)
+        }
     }
 
     @discardableResult
@@ -785,6 +815,11 @@ struct ContentView: View {
             ValueRow("Projected salary/pension tax", formatSEK(value.projectedOrdinaryTax), isTotal: true)
         ]
     }
+}
+
+private struct PDFExportError: Identifiable {
+    let id = UUID()
+    let message: String
 }
 
 struct ContentViewPreviews: PreviewProvider {

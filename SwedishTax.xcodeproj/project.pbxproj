@@ -25,6 +25,7 @@
 		B00000000000000000000016 /* CardsAndRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000016 /* CardsAndRows.swift */; };
 		B00000000000000000000017 /* Formatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000017 /* Formatting.swift */; };
 		B00000000000000000000018 /* TaxTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000018 /* TaxTheme.swift */; };
+		B00000000000000000000019 /* CalculationPDFReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000019 /* CalculationPDFReport.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -58,6 +59,7 @@
 		A00000000000000000000016 /* CardsAndRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardsAndRows.swift; sourceTree = "<group>"; };
 		A00000000000000000000017 /* Formatting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Formatting.swift; sourceTree = "<group>"; };
 		A00000000000000000000018 /* TaxTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaxTheme.swift; sourceTree = "<group>"; };
+		A00000000000000000000019 /* CalculationPDFReport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalculationPDFReport.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -117,6 +119,7 @@
 			children = (
 				A00000000000000000000012 /* IncomeEntryViews.swift */,
 				A00000000000000000000013 /* CalculationTraceView.swift */,
+				A00000000000000000000019 /* CalculationPDFReport.swift */,
 				A00000000000000000000014 /* HelpViews.swift */,
 			);
 			path = Features;
@@ -291,6 +294,7 @@
 				B00000000000000000000002 /* ContentView.swift in Sources */,
 				B00000000000000000000012 /* IncomeEntryViews.swift in Sources */,
 				B00000000000000000000013 /* CalculationTraceView.swift in Sources */,
+				B00000000000000000000019 /* CalculationPDFReport.swift in Sources */,
 				B00000000000000000000014 /* HelpViews.swift in Sources */,
 				B00000000000000000000015 /* FormComponents.swift in Sources */,
 				B00000000000000000000016 /* CardsAndRows.swift in Sources */,

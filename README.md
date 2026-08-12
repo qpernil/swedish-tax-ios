@@ -28,6 +28,8 @@ bases, withholding, pension calculations, and complete plan results.
   and salary exchange with employer uplift and allowance validation.
 - Annual final-tax and preliminary-withholding reconciliation, expected
   balance, marginal tax, PGI progress, SGI progress, and calculation trace.
+- Polished A4 PDF reports with every calculation section expanded, available
+  through the system share sheet for saving, printing, or sending.
 - Complete local persistence of every named calculation and the current
   selection.
 
@@ -141,7 +143,8 @@ protection. No income data is transmitted, and the app has no runtime network
 integration.
 
 Deleting the app also deletes these locally stored calculations. There is
-currently no iCloud synchronization or calculation export.
+currently no iCloud synchronization. A calculation leaves the device only when
+the user explicitly exports its PDF through the system share sheet.
 
 ## Project structure
 

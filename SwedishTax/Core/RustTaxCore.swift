@@ -11,7 +11,7 @@ enum RustTaxCoreError: Error, Equatable {
 
 /// Thin Swift mapping over the stable C API exported by the Rust tax core.
 enum RustTaxCore {
-    private static let contractVersion: UInt32 = 1
+    private static let contractVersion: UInt32 = 2
 
     static func monthlyDeduction(
         table: UInt8,
@@ -161,6 +161,8 @@ enum RustTaxCore {
         result.start.day = UInt32(value.start.day)
         result.end.month = UInt32(value.end.month)
         result.end.day = UInt32(value.end.day)
+        result.use_annual_daily_rate_for_partial_months = value
+            .useAnnualDailyRateForPartialMonths ? 1 : 0
         result.payer_role = value.payerRole == .main ? 0 : 1
         result.own_company_sourced = value.ownCompanySourced ? 1 : 0
         result.adjustment_applies = value.adjustmentApplies ? 1 : 0
@@ -185,6 +187,8 @@ enum RustTaxCore {
         result.is_some = 1
         result.annual_entitlement_days = value.annualEntitlementDays
         result.payout_days = value.payoutDays
+        result.rate_basis_points = value.rateBasisPoints
+            ?? VacationCompensation.defaultRateBasisPoints
         result.included_in_pension_salary_basis = value.includedInPensionSalaryBasis ? 1 : 0
         result.pension_premium_override = optional(value.pensionPremiumOverride)
         return result
@@ -209,6 +213,12 @@ enum RustTaxCore {
         result.sacrificed_salary = value.sacrificedSalary
         result.employer_adds_uplift = value.employerAddsUplift ? 1 : 0
         result.uplift_basis_points = value.upliftBasisPoints
+        result.previous_year_pension_salary_basis = optional(
+            value.previousYearPensionSalaryBasis
+        )
+        result.pension_and_insurance_costs_before_exchange = optional(
+            value.pensionAndInsuranceCostsBeforeExchange
+        )
         return result
     }
 

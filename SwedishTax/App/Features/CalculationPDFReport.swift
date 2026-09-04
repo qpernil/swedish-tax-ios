@@ -379,7 +379,7 @@ private extension CalculationPDFReport {
             ReportRow(label: "Taxable salary and pension", value: currency(calculation.ordinaryIncome)),
             ReportRow(label: "Own-AB dividend", value: currency(calculation.dividendIncome)),
             ReportRow(
-                label: "Employer pension contributions",
+                label: "Modeled employer pension contributions",
                 value: currency(calculation.employerPensionContributions)
             ),
             ReportRow(label: "Final tax estimate", value: currency(calculation.totalTax)),

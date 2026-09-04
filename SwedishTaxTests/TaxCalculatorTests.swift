@@ -131,16 +131,16 @@ final class TaxCalculatorTests: XCTestCase {
         )
         let calibration = try XCTUnwrap(calculation.adjustmentCalibration)
 
-        XCTAssertEqual(calculation.workIncome, 1_378_883)
+        XCTAssertEqual(calculation.workIncome, 1_383_528)
         XCTAssertEqual(calculation.pensionIncome, 137_500)
-        XCTAssertEqual(calculation.ordinaryIncome, 1_516_383)
-        XCTAssertEqual(calculation.annualTax.total, 600_613)
-        XCTAssertEqual(calculation.ordinaryFinalTax, 576_436)
-        XCTAssertEqual(calculation.withheldTax, 496_281)
-        XCTAssertEqual(calculation.taxBalance, 80_155)
+        XCTAssertEqual(calculation.ordinaryIncome, 1_521_028)
+        XCTAssertEqual(calculation.annualTax.total, 603_057)
+        XCTAssertEqual(calculation.ordinaryFinalTax, 578_880)
+        XCTAssertEqual(calculation.withheldTax, 497_814)
+        XCTAssertEqual(calculation.taxBalance, 81_066)
         XCTAssertEqual(calculation.regularPensionPremiums, 139_954)
-        XCTAssertEqual(calculation.vacationPensionPremiums, 34_765)
-        XCTAssertEqual(calculation.employerPensionContributions, 174_719)
+        XCTAssertEqual(calculation.vacationPensionPremiums, 36_159)
+        XCTAssertEqual(calculation.employerPensionContributions, 176_113)
         XCTAssertEqual(calibration.basisIncome, 1_116_000)
         XCTAssertEqual(calibration.impliedTaxAdjustment, 24_177)
         XCTAssertEqual(calculation.withholding.entries.map(\.rule), [
@@ -266,7 +266,7 @@ final class TaxCalculatorTests: XCTestCase {
         plan.entries[0].setVacationAnnualEntitlementDays(30)
         XCTAssertEqual(plan.entries[0].annualAmount, 891_000)
         XCTAssertEqual(plan.entries[0].vacationCompensation?.payoutDays, 24)
-        XCTAssertEqual(plan.entries[0].vacationCompensationAmount, 115_883)
+        XCTAssertEqual(plan.entries[0].vacationCompensationAmount, 120_528)
 
         let lumpID = plan.addEntry(kind: .oneTimeSalary)
         let lumpIndex = try XCTUnwrap(plan.entries.firstIndex { $0.id == lumpID })
@@ -274,10 +274,35 @@ final class TaxCalculatorTests: XCTestCase {
         plan.entries[lumpIndex].salaryExchange = SalaryExchange()
 
         let allowance = try XCTUnwrap(plan.salaryExchangeAllowance(for: lumpID))
-        XCTAssertEqual(allowance.pensionSalaryBasisBefore, 1_006_883)
-        XCTAssertEqual(allowance.ceiling, 352_409)
-        XCTAssertEqual(allowance.availableContribution, 177_690)
-        XCTAssertEqual(allowance.maximumSacrifice, 168_012)
+        XCTAssertEqual(allowance.pensionSalaryBasisBefore, 1_011_528)
+        XCTAssertEqual(allowance.ceiling, 354_034)
+        XCTAssertEqual(allowance.pensionContributionsBefore, 176_113)
+        XCTAssertEqual(allowance.availableContribution, 177_921)
+        XCTAssertEqual(allowance.maximumSacrifice, 168_231)
+
+        plan.entries[lumpIndex].salaryExchange?.upliftBasisPoints = 580
+        plan.entries[lumpIndex].salaryExchange?.previousYearPensionSalaryBasis = 1_092_000
+        plan.entries[lumpIndex].salaryExchange?.pensionAndInsuranceCostsBeforeExchange = 158_170
+        plan.entries[lumpIndex].salaryExchange?.sacrificedSalary = 211_000
+        let yubicoAllowance = try XCTUnwrap(plan.salaryExchangeAllowance(for: lumpID))
+        XCTAssertEqual(yubicoAllowance.ceiling, 382_200)
+        XCTAssertEqual(yubicoAllowance.pensionContributionsBefore, 158_170)
+        XCTAssertEqual(yubicoAllowance.availableContribution, 224_030)
+        XCTAssertEqual(yubicoAllowance.maximumSacrifice, 211_749)
+        XCTAssertEqual(plan.entries[lumpIndex].salaryExchangePensionContribution, 223_238)
+
+        plan.entries[0].useAnnualDailyRateForPartialMonths = true
+        XCTAssertEqual(plan.entries[0].annualAmount, 892_036)
+        plan.entries[0].vacationCompensation?.rateBasisPoints = 500
+
+        let rustCalculation = try RustTaxCore.planCalculation(
+            table: 32,
+            ageGroup: .under66,
+            plan: plan
+        )
+        XCTAssertEqual(rustCalculation.workIncome, 1_164_636)
+        XCTAssertEqual(rustCalculation.salaryExchangeSacrifice, 211_000)
+        XCTAssertEqual(rustCalculation.salaryExchangePensionContributions, 223_238)
     }
 
     func testPersistedWorkspaceRoundTripsMultipleCompleteCalculations() throws {
@@ -445,6 +470,7 @@ final class TaxCalculatorTests: XCTestCase {
         var entries = try XCTUnwrap(object["entries"] as? [[String: Any]])
         entries[0].removeValue(forKey: "ownCompanySourced")
         entries[0].removeValue(forKey: "actualWithholding")
+        entries[0].removeValue(forKey: "useAnnualDailyRateForPartialMonths")
         object["entries"] = entries
 
         let legacy = try JSONSerialization.data(withJSONObject: object)
@@ -452,6 +478,7 @@ final class TaxCalculatorTests: XCTestCase {
 
         XCTAssertFalse(restored.entries[0].ownCompanySourced)
         XCTAssertNil(restored.entries[0].actualWithholding)
+        XCTAssertFalse(restored.entries[0].useAnnualDailyRateForPartialMonths)
         XCTAssertEqual(restored.dividendAllowance, DividendAllowanceInputs2027())
     }
 

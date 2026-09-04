@@ -217,6 +217,17 @@ struct IncomeEntryEditor: View {
             Text("Both the first and last day are included.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
+            Toggle(
+                "Use annual daily rate for partial months (12/365)",
+                isOn: entry.useAnnualDailyRateForPartialMonths
+            )
+            Text(
+                entry.wrappedValue.useAnnualDailyRateForPartialMonths
+                    ? "Partial months use monthly amount × 12 ÷ 365."
+                    : "Partial months use the number of calendar days in that month (default)."
+            )
+                .font(.footnote)
+                .foregroundStyle(.secondary)
             Button("Use full year") {
                 entry.wrappedValue.start = Date2026(month: 1, day: 1)
                 entry.wrappedValue.end = Date2026(month: 12, day: 31)
@@ -269,7 +280,11 @@ struct IncomeEntryEditor: View {
                 )
                 Button("Use suggested days") { updateSuggestedVacationDays(entry) }
                     .buttonStyle(.bordered)
-                Text("Same-pay estimate: monthly salary / 21 plus 0.43% per paid day.")
+                BasisPointsPercentageField(
+                    title: "Compensation rate per paid day",
+                    basisPoints: vacationRateBinding(entry)
+                )
+                Text("Scenario default: 5.4% of monthly salary per paid day, commonly used under collective agreements. Edit it to match the employer's calculation.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 LabeledContent("Vacation compensation", value: formatSEK(entry.wrappedValue.vacationCompensationAmount))
@@ -364,6 +379,60 @@ struct IncomeEntryEditor: View {
                 }
             ))
             if entry.wrappedValue.salaryExchange != nil {
+                Toggle(
+                    "Use previous year's pensionable salary for the 35% ceiling",
+                    isOn: Binding(
+                        get: {
+                            entry.wrappedValue.salaryExchange?
+                                .previousYearPensionSalaryBasis != nil
+                        },
+                        set: { enabled in
+                            let suggested = plan.salaryExchangeAllowance(for: entryID)?
+                                .pensionSalaryBasisBefore ?? 0
+                            entry.wrappedValue.salaryExchange?
+                                .previousYearPensionSalaryBasis = enabled ? suggested : nil
+                        }
+                    )
+                )
+                if entry.wrappedValue.salaryExchange?.previousYearPensionSalaryBasis != nil {
+                    UIntField(
+                        title: "Previous year's pensionable salary",
+                        value: salaryExchangeOptionalBinding(
+                            entry,
+                            \.previousYearPensionSalaryBasis
+                        ),
+                        suffix: "SEK"
+                    )
+                }
+                Toggle(
+                    "Use actual pension and insurance costs before this exchange",
+                    isOn: Binding(
+                        get: {
+                            entry.wrappedValue.salaryExchange?
+                                .pensionAndInsuranceCostsBeforeExchange != nil
+                        },
+                        set: { enabled in
+                            let suggested = plan.salaryExchangeAllowance(for: entryID)?
+                                .pensionContributionsBefore ?? 0
+                            entry.wrappedValue.salaryExchange?
+                                .pensionAndInsuranceCostsBeforeExchange = enabled
+                                    ? suggested
+                                    : nil
+                        }
+                    )
+                )
+                if entry.wrappedValue.salaryExchange?
+                    .pensionAndInsuranceCostsBeforeExchange != nil
+                {
+                    UIntField(
+                        title: "Pension and insurance costs before exchange",
+                        value: salaryExchangeOptionalBinding(
+                            entry,
+                            \.pensionAndInsuranceCostsBeforeExchange
+                        ),
+                        suffix: "SEK"
+                    )
+                }
                 Toggle("Employer adds uplift", isOn: salaryExchangeBoolBinding(entry, \.employerAddsUplift, default: true))
                 if entry.wrappedValue.salaryExchange?.employerAddsUplift == true {
                     BasisPointsPercentageField(
@@ -376,10 +445,29 @@ struct IncomeEntryEditor: View {
                     )
                 }
                 if let allowance = plan.salaryExchangeAllowance(for: entryID) {
+                    let usesPreviousYearBasis = entry.wrappedValue.salaryExchange?
+                        .previousYearPensionSalaryBasis != nil
                     ValueRows(rows: [
-                        ValueRow("Pensionable salary before exchange", formatSEK(allowance.pensionSalaryBasisBefore)),
-                        ValueRow("Pensionable salary after exchange", formatSEK(allowance.pensionSalaryBasisAfter)),
+                        ValueRow(
+                            usesPreviousYearBasis
+                                ? "Previous-year pensionable salary"
+                                : "Current-year pensionable salary before exchange",
+                            formatSEK(allowance.pensionSalaryBasisBefore)
+                        ),
+                        ValueRow(
+                            usesPreviousYearBasis
+                                ? "Previous-year pensionable salary (fixed)"
+                                : "Current-year pensionable salary after exchange",
+                            formatSEK(allowance.pensionSalaryBasisAfter)
+                        ),
                         ValueRow("35% contribution ceiling", formatSEK(allowance.ceiling)),
+                        ValueRow(
+                            entry.wrappedValue.salaryExchange?
+                                .pensionAndInsuranceCostsBeforeExchange == nil
+                                ? "Calculated pension contributions before exchange"
+                                : "Actual pension and insurance costs before exchange",
+                            formatSEK(allowance.pensionContributionsBefore)
+                        ),
                         ValueRow("Contribution room", formatSEK(allowance.availableContribution))
                     ])
                     UIntField(
@@ -397,7 +485,11 @@ struct IncomeEntryEditor: View {
                     .fontWeight(.semibold)
                 LabeledContent("Taxable cash payment", value: formatSEK(entry.wrappedValue.totalAnnualAmount))
             }
-            Text("Indicative current-year main-rule estimate: employer pension contributions are limited to 35% of pensionable salary, capped at 592,000 SEK for 2026.")
+            Text(
+                entry.wrappedValue.salaryExchange?.previousYearPensionSalaryBasis == nil
+                    ? "Current-year main-rule estimate: pension and insurance costs are limited to 35% of pensionable salary after exchange, rounded down to whole SEK and capped at 592,000 SEK for 2026."
+                    : "Previous-year main-rule estimate: pension and insurance costs are limited to 35% of the fixed preceding-year pensionable salary, rounded down to whole SEK and capped at 592,000 SEK for 2026."
+            )
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
@@ -569,6 +661,20 @@ struct IncomeEntryEditor: View {
         )
     }
 
+    private func vacationRateBinding(_ entry: Binding<IncomeEntry>) -> Binding<UInt32> {
+        Binding(
+            get: {
+                entry.wrappedValue.vacationCompensation?.rateBasisPoints
+                    ?? VacationCompensation.defaultRateBasisPoints
+            },
+            set: { value in
+                guard var vacation = entry.wrappedValue.vacationCompensation else { return }
+                vacation.rateBasisPoints = value
+                entry.wrappedValue.vacationCompensation = vacation
+            }
+        )
+    }
+
     private func pensionOverrideBinding(_ entry: Binding<IncomeEntry>) -> Binding<UInt32> {
         Binding(
             get: { entry.wrappedValue.regularPensionPremium?.monthlyOverride ?? 0 },
@@ -602,6 +708,20 @@ struct IncomeEntryEditor: View {
     ) -> Binding<Bool> {
         Binding(
             get: { entry.wrappedValue.salaryExchange?[keyPath: keyPath] ?? defaultValue },
+            set: { value in
+                guard var exchange = entry.wrappedValue.salaryExchange else { return }
+                exchange[keyPath: keyPath] = value
+                entry.wrappedValue.salaryExchange = exchange
+            }
+        )
+    }
+
+    private func salaryExchangeOptionalBinding(
+        _ entry: Binding<IncomeEntry>,
+        _ keyPath: WritableKeyPath<SalaryExchange, UInt32?>
+    ) -> Binding<UInt32> {
+        Binding(
+            get: { entry.wrappedValue.salaryExchange?[keyPath: keyPath] ?? 0 },
             set: { value in
                 guard var exchange = entry.wrappedValue.salaryExchange else { return }
                 exchange[keyPath: keyPath] = value

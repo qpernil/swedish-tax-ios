@@ -764,7 +764,7 @@ struct ContentView: View {
         var rows = [
             ValueRow("Taxable salary and pension", formatSEK(value.ordinaryIncome)),
             ValueRow("Own-AB dividend", formatSEK(value.dividendIncome)),
-            ValueRow("Employer pension contributions", formatSEK(value.employerPensionContributions)),
+            ValueRow("Modeled employer pension contributions", formatSEK(value.employerPensionContributions)),
             ValueRow("Final tax estimate", formatSEK(value.totalTax)),
             ValueRow("Preliminary tax withheld", formatCredit(value.withheldTax)),
             ValueRow("Cash after withholding", formatSEK(value.cashAfterWithholding))

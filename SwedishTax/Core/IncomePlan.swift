@@ -124,6 +124,8 @@ struct SalaryExchange: Codable, Equatable, Sendable {
     var sacrificedSalary: UInt32 = 0
     var employerAddsUplift = true
     var upliftBasisPoints: UInt32 = defaultUpliftBasisPoints
+    var previousYearPensionSalaryBasis: UInt32?
+    var pensionAndInsuranceCostsBeforeExchange: UInt32?
 
     var pensionContribution: UInt32 {
         employerAddsUplift
@@ -135,7 +137,10 @@ struct SalaryExchange: Codable, Equatable, Sendable {
     }
 
     static func allowanceCeiling(pensionSalaryBasis: UInt32) -> UInt32 {
-        min(roundedBasisPoints(pensionSalaryBasis, 3_500), allowanceMaximum)
+        min(
+            UInt32(UInt64(pensionSalaryBasis) * 3_500 / 10_000),
+            allowanceMaximum
+        )
     }
 
     func maximumSacrifice(
@@ -148,9 +153,11 @@ struct SalaryExchange: Codable, Equatable, Sendable {
         var high = paymentAmount
         while low < high {
             let candidate = low + (high - low + 1) / 2
-            let basisAfter = paymentIsPensionable
-                ? pensionSalaryBasisBefore.saturatingSubtract(candidate)
-                : pensionSalaryBasisBefore
+            let basisAfter = previousYearPensionSalaryBasis ?? (
+                paymentIsPensionable
+                    ? pensionSalaryBasisBefore.saturatingSubtract(candidate)
+                    : pensionSalaryBasisBefore
+            )
             var proposal = self
             proposal.sacrificedSalary = candidate
             let valid = pensionContributionsBefore
@@ -164,8 +171,11 @@ struct SalaryExchange: Codable, Equatable, Sendable {
 }
 
 struct VacationCompensation: Codable, Equatable, Sendable {
+    static let defaultRateBasisPoints: UInt32 = 540
+
     var annualEntitlementDays: UInt32
     var payoutDays: UInt32
+    var rateBasisPoints: UInt32?
     var includedInPensionSalaryBasis = true
     var pensionPremiumOverride: UInt32?
 
@@ -187,16 +197,17 @@ struct VacationCompensation: Codable, Equatable, Sendable {
     }
 
     func amount(monthlySalary: UInt32) -> UInt32 {
-        let denominator: UInt64 = 21 * 10_000
-        let numeratorPerDay: UInt64 = 10_000 + 43 * 21
-        let salaryDays = UInt64(monthlySalary) * UInt64(payoutDays)
-        let numerator = salaryDays > UInt64.max / numeratorPerDay
-            ? UInt64.max
-            : salaryDays * numeratorPerDay
-        let roundedNumerator = numerator > UInt64.max - denominator / 2
-            ? UInt64.max
-            : numerator + denominator / 2
-        return UInt32(min(roundedNumerator / denominator, UInt64(UInt32.max)))
+        let salaryDays = UInt64(monthlySalary).multipliedReportingOverflow(
+            by: UInt64(payoutDays)
+        )
+        let numerator = (salaryDays.overflow ? UInt64.max : salaryDays.partialValue)
+            .multipliedReportingOverflow(by: UInt64(rateBasisPoints ?? Self.defaultRateBasisPoints))
+        let unrounded = numerator.overflow ? UInt64.max : numerator.partialValue
+        let rounded = unrounded.addingReportingOverflow(5_000)
+        return UInt32(min(
+            (rounded.overflow ? UInt64.max : rounded.partialValue) / 10_000,
+            UInt64(UInt32.max)
+        ))
     }
 }
 
@@ -207,6 +218,7 @@ struct IncomeEntry: Codable, Identifiable, Equatable, Sendable {
     var amount: UInt32 = 0
     var start = Date2026(month: 1, day: 1)
     var end = Date2026(month: 12, day: 31)
+    var useAnnualDailyRateForPartialMonths = false
     var payerRole: PayerRole = .main
     var ownCompanySourced = false
     var adjustmentApplies = false
@@ -227,7 +239,8 @@ struct IncomeEntry: Codable, Identifiable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, description, kind, amount, start, end, payerRole
+        case id, description, kind, amount, start, end
+        case useAnnualDailyRateForPartialMonths, payerRole
         case ownCompanySourced, adjustmentApplies
         case useFullYearProjectionAsAdjustmentBasis, additionalWithholdingPerPayment
         case actualWithholding, vacationCompensation, regularPensionPremium
@@ -245,6 +258,10 @@ struct IncomeEntry: Codable, Identifiable, Equatable, Sendable {
             ?? Date2026(month: 1, day: 1)
         end = try values.decodeIfPresent(Date2026.self, forKey: .end)
             ?? Date2026(month: 12, day: 31)
+        useAnnualDailyRateForPartialMonths = try values.decodeIfPresent(
+            Bool.self,
+            forKey: .useAnnualDailyRateForPartialMonths
+        ) ?? false
         payerRole = try values.decodeIfPresent(PayerRole.self, forKey: .payerRole) ?? .main
         ownCompanySourced = try values.decodeIfPresent(
             Bool.self,
@@ -286,6 +303,10 @@ struct IncomeEntry: Codable, Identifiable, Equatable, Sendable {
         try values.encode(amount, forKey: .amount)
         try values.encode(start, forKey: .start)
         try values.encode(end, forKey: .end)
+        try values.encode(
+            useAnnualDailyRateForPartialMonths,
+            forKey: .useAnnualDailyRateForPartialMonths
+        )
         try values.encode(payerRole, forKey: .payerRole)
         try values.encode(ownCompanySourced, forKey: .ownCompanySourced)
         try values.encode(adjustmentApplies, forKey: .adjustmentApplies)
@@ -312,7 +333,7 @@ struct IncomeEntry: Codable, Identifiable, Equatable, Sendable {
         let firstDay: UInt8 = month == first.month ? first.day : 1
         let lastDay: UInt8 = month == last.month ? last.day : Date2026.daysInMonth(month)
         let activeDays = UInt32(lastDay - firstDay + 1)
-        return amount.saturatingMultiply(activeDays) / UInt32(Date2026.daysInMonth(month))
+        return proratedPartialMonthValue(month: month, value: amount, activeDays: activeDays)
     }
 
     var annualAmount: UInt32 {
@@ -420,6 +441,7 @@ struct IncomeEntry: Codable, Identifiable, Equatable, Sendable {
         }
         if kind != .oneTimeSalary { salaryExchange = nil }
         if kind != .monthlySalary { vacationCompensation = nil }
+        if !kind.isMonthly { useAnnualDailyRateForPartialMonths = false }
         if kind.isDividend {
             adjustmentApplies = false
             additionalWithholdingPerPayment = nil
@@ -454,8 +476,25 @@ struct IncomeEntry: Codable, Identifiable, Equatable, Sendable {
         guard month >= first.month, month <= last.month else { return 0 }
         let firstDay: UInt8 = month == first.month ? first.day : 1
         let lastDay: UInt8 = month == last.month ? last.day : Date2026.daysInMonth(month)
-        return value.saturatingMultiply(UInt32(lastDay - firstDay + 1))
-            / UInt32(Date2026.daysInMonth(month))
+        return proratedPartialMonthValue(
+            month: month,
+            value: value,
+            activeDays: UInt32(lastDay - firstDay + 1)
+        )
+    }
+
+    private func proratedPartialMonthValue(
+        month: UInt8,
+        value: UInt32,
+        activeDays: UInt32
+    ) -> UInt32 {
+        let daysInMonth = UInt32(Date2026.daysInMonth(month))
+        if activeDays == daysInMonth { return value }
+        if useAnnualDailyRateForPartialMonths {
+            let numerator = UInt64(value) * 12 * UInt64(activeDays)
+            return UInt32(min((numerator + 182) / 365, UInt64(UInt32.max)))
+        }
+        return value.saturatingMultiply(activeDays) / daysInMonth
     }
 }
 
@@ -611,14 +650,18 @@ struct IncomePlan: Codable, Equatable, Sendable {
         let selectedContribution = entry.salaryExchangePensionContribution
         let otherExchange = totals.salaryExchangePensionContributions
             .saturatingSubtract(selectedContribution)
-        let contributionsBefore = totals.regularPensionPremiums
+        let calculatedContributionsBefore = totals.regularPensionPremiums
             .saturatingAdd(totals.vacationPensionPremiums)
             .saturatingAdd(otherExchange)
+        let contributionsBefore = exchange.pensionAndInsuranceCostsBeforeExchange
+            ?? calculatedContributionsBefore
         let sacrificeInBasis = entry.includedInPensionSalaryBasis
             ? entry.salaryExchangeSacrifice
             : 0
-        let basisBefore = totals.pensionSalaryBasis.saturatingAdd(sacrificeInBasis)
-        let basisAfter = basisBefore.saturatingSubtract(sacrificeInBasis)
+        let currentYearBasisBefore = totals.pensionSalaryBasis.saturatingAdd(sacrificeInBasis)
+        let currentYearBasisAfter = currentYearBasisBefore.saturatingSubtract(sacrificeInBasis)
+        let basisBefore = exchange.previousYearPensionSalaryBasis ?? currentYearBasisBefore
+        let basisAfter = exchange.previousYearPensionSalaryBasis ?? currentYearBasisAfter
         let ceiling = SalaryExchange.allowanceCeiling(pensionSalaryBasis: basisAfter)
         return SalaryExchangeAllowance(
             ceiling: ceiling,
@@ -627,6 +670,7 @@ struct IncomePlan: Codable, Equatable, Sendable {
             regularPensionPremiums: totals.regularPensionPremiums,
             vacationPensionPremiums: totals.vacationPensionPremiums,
             otherExchangeContributions: otherExchange,
+            pensionContributionsBefore: contributionsBefore,
             availableContribution: ceiling.saturatingSubtract(contributionsBefore),
             maximumSacrifice: exchange.maximumSacrifice(
                 paymentAmount: entry.amount,
@@ -670,6 +714,7 @@ struct SalaryExchangeAllowance: Equatable, Sendable {
     let regularPensionPremiums: UInt32
     let vacationPensionPremiums: UInt32
     let otherExchangeContributions: UInt32
+    let pensionContributionsBefore: UInt32
     let availableContribution: UInt32
     let maximumSacrifice: UInt32
 }

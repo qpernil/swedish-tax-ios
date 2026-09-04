@@ -21,7 +21,10 @@ struct CalculationPDFReport {
     @MainActor
     func pdfData() throws -> Data {
         let formatter = UIMarkupTextPrintFormatter(markupText: html)
-        formatter.perPageContentInsets = .zero
+        // WebKit can otherwise continue a block at the physical top edge of a
+        // later page, underneath the repeating header. Reserve explicit space
+        // on every page in addition to the renderer's printable margins.
+        formatter.perPageContentInsets = UIEdgeInsets(top: 28, left: 0, bottom: 14, right: 0)
 
         let renderer = CalculationPageRenderer(documentName: document.name)
         renderer.addPrintFormatter(formatter, startingAtPageAt: 0)
@@ -166,6 +169,8 @@ struct CalculationPDFReport {
               border: 1px solid #d2dad7;
               border-radius: 10px;
               break-inside: avoid;
+              page-break-inside: avoid;
+              -webkit-column-break-inside: avoid;
               margin: 0 0 9px;
               padding: 10px 12px;
             }
@@ -378,12 +383,20 @@ private extension CalculationPDFReport {
         var rows = [
             ReportRow(label: "Taxable salary and pension", value: currency(calculation.ordinaryIncome)),
             ReportRow(label: "Own-AB dividend", value: currency(calculation.dividendIncome)),
+            ReportRow(label: "Total cash income", value: currency(calculation.annualIncome)),
+            ReportRow(label: "SGI annualized recurring salary", value: currency(calculation.sgiAnnualRate)),
+            ReportRow(label: "Pension salary basis after exchange", value: currency(calculation.pensionSalaryBasis)),
+            ReportRow(label: "Regular pension contributions", value: currency(calculation.regularPensionPremiums)),
+            ReportRow(label: "Vacation-payout pension contributions", value: currency(calculation.vacationPensionPremiums)),
+            ReportRow(label: "Salary-exchange pension contributions", value: currency(calculation.salaryExchangePensionContributions)),
             ReportRow(
                 label: "Modeled employer pension contributions",
-                value: currency(calculation.employerPensionContributions)
+                value: "\(currency(calculation.employerPensionContributions)) · \(decimal(calculation.employerPensionShareOfBasis))% of basis"
             ),
+            ReportRow(label: "Effective final tax rate", value: "\(decimal(calculation.effectiveRate))%"),
             ReportRow(label: "Final tax estimate", value: currency(calculation.totalTax)),
             ReportRow(label: "Preliminary tax withheld", value: credit(calculation.withheldTax)),
+            ReportRow(label: "Cash after withholding", value: currency(calculation.cashAfterWithholding)),
             ReportRow(
                 label: "Expected balance",
                 value: "\(balanceValue) - \(balanceLabel)",
@@ -394,7 +407,7 @@ private extension CalculationPDFReport {
         if calculation.salaryExchangeSacrifice > 0 {
             rows.insert(
                 ReportRow(label: "Salary exchanged", value: credit(calculation.salaryExchangeSacrifice)),
-                at: 2
+                at: 3
             )
         }
         return section("Annual reconciliation", subtitle: "Expanded", rows: rows)
@@ -431,6 +444,12 @@ private extension CalculationPDFReport {
         ]
         if entry.kind.isMonthly {
             rows.append(ReportRow(label: "Payment period", value: "\(date2026(entry.start)) to \(date2026(entry.end))"))
+            rows.append(ReportRow(
+                label: "Partial-month calculation",
+                value: entry.useAnnualDailyRateForPartialMonths
+                    ? "Annual daily rate (monthly amount × 12 ÷ 365)"
+                    : "Calendar days in each partial month"
+            ))
         }
         rows.append(ReportRow(label: "Annual cash amount", value: currency(entry.totalAnnualAmount), isTotal: true))
 
@@ -458,12 +477,35 @@ private extension CalculationPDFReport {
                 label: "Included in pension salary basis",
                 value: yesNo(entry.includedInPensionSalaryBasis)
             ))
+            rows.append(ReportRow(
+                label: "Use full-year projection as jämkning basis",
+                value: yesNo(entry.useFullYearProjectionAsAdjustmentBasis)
+            ))
+            if entry.useFullYearProjectionAsAdjustmentBasis {
+                rows.append(ReportRow(
+                    label: "Full-year jämkning basis from entry",
+                    value: currency(entry.fullYearAdjustmentBasisAmount)
+                ))
+            }
         }
         if let vacation = entry.vacationCompensation {
             rows.append(contentsOf: [
                 ReportRow(label: "Vacation entitlement", value: "\(vacation.annualEntitlementDays) days"),
                 ReportRow(label: "Vacation payout", value: "\(vacation.payoutDays) days"),
+                ReportRow(
+                    label: "Vacation compensation rate per paid day",
+                    value: "\(basisPoints(vacation.rateBasisPoints ?? VacationCompensation.defaultRateBasisPoints))%"
+                ),
                 ReportRow(label: "Vacation compensation", value: currency(entry.vacationCompensationAmount)),
+                ReportRow(
+                    label: "Vacation payout included in pension salary basis",
+                    value: yesNo(vacation.includedInPensionSalaryBasis)
+                ),
+                ReportRow(
+                    label: "Vacation pension premium setting",
+                    value: vacation.pensionPremiumOverride.map { "Actual \(currency($0))" }
+                        ?? (vacation.includedInPensionSalaryBasis ? "Calculated benchmark" : "Not included")
+                ),
                 ReportRow(
                     label: "Vacation pay pension premium",
                     value: currency(entry.vacationPensionPremiumAmount)
@@ -483,6 +525,18 @@ private extension CalculationPDFReport {
         if let exchange = entry.salaryExchange {
             rows.append(contentsOf: [
                 ReportRow(label: "Salary exchanged", value: currency(entry.salaryExchangeSacrifice)),
+                ReportRow(
+                    label: exchange.previousYearPensionSalaryBasis == nil
+                        ? "Current-year pensionable salary for 35% ceiling"
+                        : "Previous year's pensionable salary for 35% ceiling",
+                    value: exchange.previousYearPensionSalaryBasis.map(currency)
+                        ?? "Current-year basis"
+                ),
+                ReportRow(
+                    label: "Pension and insurance costs before exchange",
+                    value: exchange.pensionAndInsuranceCostsBeforeExchange.map(currency)
+                        ?? "Calculated from modeled contributions"
+                ),
                 ReportRow(label: "Employer uplift", value: yesNo(exchange.employerAddsUplift)),
                 ReportRow(
                     label: "Uplift percentage",
@@ -493,6 +547,19 @@ private extension CalculationPDFReport {
                     value: currency(entry.salaryExchangePensionContribution)
                 ),
             ])
+            if let allowance = document.plan.salaryExchangeAllowance(for: entry.id) {
+                rows.append(contentsOf: [
+                    ReportRow(label: "Pension salary basis before exchange", value: currency(allowance.pensionSalaryBasisBefore)),
+                    ReportRow(label: "Pension salary basis after exchange", value: currency(allowance.pensionSalaryBasisAfter)),
+                    ReportRow(label: "35% contribution ceiling", value: currency(allowance.ceiling)),
+                    ReportRow(label: "Regular contributions before exchange", value: currency(allowance.regularPensionPremiums)),
+                    ReportRow(label: "Vacation contributions before exchange", value: currency(allowance.vacationPensionPremiums)),
+                    ReportRow(label: "Other exchange contributions", value: currency(allowance.otherExchangeContributions)),
+                    ReportRow(label: "Total costs before selected exchange", value: currency(allowance.pensionContributionsBefore)),
+                    ReportRow(label: "Available contribution room", value: currency(allowance.availableContribution)),
+                    ReportRow(label: "Maximum salary exchange", value: currency(allowance.maximumSacrifice)),
+                ])
+            }
         }
         if let withholding {
             rows.append(contentsOf: [
@@ -661,11 +728,24 @@ private extension CalculationPDFReport {
         ])
 
         do {
-            let allowance = try document.plan.dividendAllowance2027()
+            let allowance = try RustTaxCore.dividendAllowance(
+                table: document.table,
+                ageGroup: document.ageGroup,
+                plan: document.plan
+            )
             rows.append(contentsOf: [
                 ReportRow(label: "Marked 2026 own-company salary", value: currency(allowance.ownerCashSalary)),
-                ReportRow(label: "Basic amount", value: currency(allowance.basicAmount)),
-                ReportRow(label: "Wage-based allowance", value: currency(allowance.wageAllowance)),
+                ReportRow(label: "Ownership-adjusted basic amount", value: currency(allowance.basicAmount)),
+                ReportRow(label: "Company/group payroll used", value: currency(allowance.companyCashPayroll)),
+                ReportRow(label: "Joint wage basis", value: currency(allowance.jointWageBasis)),
+                ReportRow(label: "Joint wage basis after deduction", value: currency(allowance.jointWageBasisAfterDeduction)),
+                ReportRow(label: "Your wage allowance before cap", value: currency(allowance.wageAllowanceBeforeCap)),
+                ReportRow(label: "Wage-cap salary", value: currency(allowance.wageCapSalary)),
+                ReportRow(label: "50× wage cap", value: currency(allowance.wageCap)),
+                ReportRow(label: "Wage-based allowance used", value: currency(allowance.wageAllowance)),
+                ReportRow(label: "Acquisition-cost interest basis", value: currency(allowance.acquisitionCostInterestBasis)),
+                ReportRow(label: "Acquisition-cost interest", value: currency(allowance.acquisitionCostInterest)),
+                ReportRow(label: "Saved allowance used", value: currency(allowance.savedAllowance)),
                 ReportRow(label: "Maximum dividend at 20%", value: currency(allowance.total), isTotal: true, tone: "green"),
                 ReportRow(label: "Personal tax if fully used", value: currency(allowance.taxAtTwentyPercent)),
                 ReportRow(label: "Net after 20% tax", value: currency(allowance.netAfterTwentyPercentTax), isTotal: true),
@@ -715,6 +795,21 @@ private extension CalculationPDFReport {
             ReportRow(label: "Total final tax", value: currency(calculation.totalTax), isTotal: true),
         ])
 
+        let adjustmentBalanceRows: [ReportRow]
+        if let calibration = calculation.adjustmentCalibration {
+            let formulaChange = Int64(calculation.annualTax.total)
+                - Int64(calibration.formulaTaxAtBasis)
+            let withholdingChange = Int64(calculation.withheldTax)
+                - Int64(calibration.assumedTaxAtBasis)
+            adjustmentBalanceRows = [
+                ReportRow(label: "Formula-tax change from projection", value: signed(formulaChange)),
+                ReportRow(label: "Withholding change from projection", value: signed(withholdingChange)),
+                ReportRow(label: "Formula change minus withholding change", value: signed(formulaChange - withholdingChange)),
+            ]
+        } else {
+            adjustmentBalanceRows = []
+        }
+
         return """
         <div class="standalone-title">Calculation trace <span class="section-subtitle">All five steps expanded</span></div>
         \(traceStep(1, "Cash income", rows: cashRows))
@@ -722,10 +817,15 @@ private extension CalculationPDFReport {
         \(traceStep(3, "Annual formula", rows: [
                 ReportRow(label: "Work income", value: currency(calculation.workIncome)),
                 ReportRow(label: "Pension income", value: currency(calculation.pensionIncome)),
+                ReportRow(label: "Assessed income", value: currency(calculation.annualTax.assessedIncome)),
+                ReportRow(label: "Basic allowance", value: credit(calculation.annualTax.basicAllowance)),
+                ReportRow(label: "Taxable income", value: currency(calculation.annualTax.taxableIncome)),
+                ReportRow(label: "Tax and fee additions", value: currency(annualTaxAdditions)),
+                ReportRow(label: "Tax credits", value: credit(annualTaxCredits)),
                 ReportRow(label: "Formula tax", value: currency(calculation.annualTax.total), isTotal: true),
         ]))
         \(traceStep(4, "Final-tax projection", rows: projectionRows))
-        \(traceStep(5, "Expected balance", rows: [
+        \(traceStep(5, "Expected balance", rows: adjustmentBalanceRows + [
                 ReportRow(label: "Total final tax", value: currency(calculation.totalTax)),
                 ReportRow(label: "Preliminary withholding", value: credit(calculation.withheldTax)),
                 ReportRow(
@@ -736,6 +836,23 @@ private extension CalculationPDFReport {
                 ),
         ]))
         """
+    }
+
+    var annualTaxAdditions: UInt32 {
+        let tax = calculation.annualTax
+        return tax.stateIncomeTax
+            .saturatingAdd(tax.municipalIncomeTax)
+            .saturatingAdd(tax.burialAndReligiousFee)
+            .saturatingAdd(tax.pensionFee)
+            .saturatingAdd(tax.publicServiceFee)
+    }
+
+    var annualTaxCredits: UInt32 {
+        let tax = calculation.annualTax
+        return tax.pensionFeeCredit
+            .saturatingAdd(tax.workIncomeCredit)
+            .saturatingAdd(tax.sicknessCompensationCredit)
+            .saturatingAdd(tax.earnedIncomeCredit)
     }
 
     func summaryCard(title: String, value: String, detail: String, style: String) -> String {

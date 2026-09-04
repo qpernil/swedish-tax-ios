@@ -138,6 +138,66 @@ enum RustTaxCore {
         }
     }
 
+    static func dividendAllowance(
+        table: UInt8,
+        ageGroup: TaxAgeGroup,
+        plan: IncomePlan
+    ) throws -> DividendAllowance2027 {
+        let nativeVersion = swedish_tax_contract_version()
+        guard nativeVersion == contractVersion else {
+            throw RustTaxCoreError.unsupportedContractVersion(nativeVersion)
+        }
+
+        let entries = plan.entries.map(entryForRust)
+        return try entries.withUnsafeBufferPointer { entries in
+            var request = SwedishTaxPlanRequest()
+            request.version = contractVersion
+            request.table = UInt32(table)
+            request.age_group = ageGroup == .under66 ? 0 : 1
+            request.entries = entries.baseAddress
+            request.entries_count = entries.count
+            request.adjustment_percent = optional(plan.adjustmentPercent)
+            request.dividend_allowance = dividendAllowanceForRust(plan.dividendAllowance)
+
+            let result = withUnsafePointer(to: &request) { request in
+                swedish_tax_dividend_allowance_for_plan(request)
+            }
+            try checkStatus(result.status)
+            switch result.issue_kind {
+            case 0:
+                return DividendAllowance2027(
+                    basicAmount: result.basic_amount,
+                    ownerCashSalary: result.owner_cash_salary,
+                    companyCashPayroll: result.company_cash_payroll,
+                    jointWageBasis: result.joint_wage_basis,
+                    jointWageBasisAfterDeduction: result.joint_wage_basis_after_deduction,
+                    wageAllowanceBeforeCap: result.wage_allowance_before_cap,
+                    wageCapSalary: result.wage_cap_salary,
+                    wageCap: result.wage_cap,
+                    wageAllowance: result.wage_allowance,
+                    acquisitionCostInterestBasis: result.acquisition_cost_interest_basis,
+                    acquisitionCostInterest: result.acquisition_cost_interest,
+                    savedAllowance: result.saved_allowance,
+                    total: result.total,
+                    taxAtTwentyPercent: result.tax_at_twenty_percent,
+                    netAfterTwentyPercentTax: result.net_after_twenty_percent_tax
+                )
+            case 1:
+                throw DividendAllowanceIssue.ownershipExceedsOneHundredPercent
+            case 2:
+                throw DividendAllowanceIssue.spouseOwnershipExceedsCompany
+            case 3:
+                throw DividendAllowanceIssue.personalSalaryExceedsCompanyPayroll
+            case 4:
+                throw DividendAllowanceIssue.missingAcquisitionCostInterestRate
+            default:
+                throw RustTaxCoreError.invalidResponse(
+                    "Unknown dividend allowance issue \(result.issue_kind)"
+                )
+            }
+        }
+    }
+
     private static func optional(_ value: UInt32?) -> SwedishTaxOptionalU32 {
         var result = SwedishTaxOptionalU32()
         result.is_some = value == nil ? 0 : 1

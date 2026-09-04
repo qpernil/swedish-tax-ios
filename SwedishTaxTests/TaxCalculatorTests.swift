@@ -260,6 +260,35 @@ final class TaxCalculatorTests: XCTestCase {
         XCTAssertEqual(dividendRow.rule, .none)
     }
 
+    func testDividendAllowanceComesFromRustWithCompleteBreakdown() throws {
+        var plan = IncomePlan(annualSalary: 900_000)
+        plan.entries[0].ownCompanySourced = true
+        plan.dividendAllowance.acquisitionCost = 200_000
+        plan.dividendAllowance.acquisitionCostInterestBasisPoints = 1_155
+        plan.dividendAllowance.savedAllowance = 50_000
+
+        let allowance = try RustTaxCore.dividendAllowance(
+            table: 32,
+            ageGroup: .under66,
+            plan: plan
+        )
+
+        XCTAssertEqual(allowance.ownerCashSalary, 900_000)
+        XCTAssertEqual(allowance.companyCashPayroll, 900_000)
+        XCTAssertEqual(allowance.jointWageBasis, 900_000)
+        XCTAssertEqual(allowance.jointWageBasisAfterDeduction, 232_800)
+        XCTAssertEqual(allowance.wageAllowanceBeforeCap, 116_400)
+        XCTAssertEqual(allowance.wageCapSalary, 900_000)
+        XCTAssertEqual(allowance.wageCap, 45_000_000)
+        XCTAssertEqual(allowance.wageAllowance, 116_400)
+        XCTAssertEqual(allowance.acquisitionCostInterestBasis, 100_000)
+        XCTAssertEqual(allowance.acquisitionCostInterest, 11_550)
+        XCTAssertEqual(allowance.savedAllowance, 50_000)
+        XCTAssertEqual(allowance.total, 511_550)
+        XCTAssertEqual(allowance.taxAtTwentyPercent, 102_310)
+        XCTAssertEqual(allowance.netAfterTwentyPercentTax, 409_240)
+    }
+
     func testVacationAndSalaryExchangeEditorCalculationsRemainStable() throws {
         var plan = IncomePlan(monthlySalary: 93_000)
         plan.entries[0].end = Date2026(month: 10, day: 18)
@@ -499,11 +528,24 @@ final class TaxCalculatorTests: XCTestCase {
         XCTAssertTrue(html.contains("Quarterly &lt;plan&gt; &amp; review"))
         XCTAssertTrue(html.contains("Employer &amp; Partners"))
         XCTAssertTrue(html.contains("All entries and options expanded"))
+        XCTAssertTrue(html.contains("Annual daily rate (monthly amount × 12 ÷ 365)"))
+        XCTAssertTrue(html.contains("Vacation compensation rate per paid day"))
+        XCTAssertTrue(html.contains("Vacation payout included in pension salary basis"))
+        XCTAssertTrue(html.contains("Actual 12 345 SEK"))
+        XCTAssertTrue(html.contains("Use full-year projection as jämkning basis"))
+        XCTAssertTrue(html.contains("Previous year&#39;s pensionable salary"))
+        XCTAssertTrue(html.contains("Pension and insurance costs before exchange"))
+        XCTAssertTrue(html.contains("Maximum salary exchange"))
         XCTAssertTrue(html.contains("Monthly table reference"))
         XCTAssertTrue(html.contains("Income-basis ceilings"))
+        XCTAssertTrue(html.contains("SGI annualized recurring salary"))
+        XCTAssertTrue(html.contains("Effective final tax rate"))
         XCTAssertTrue(html.contains("Annual tax projection breakdown"))
         XCTAssertTrue(html.contains("Preliminary 2027 dividend allowance"))
+        XCTAssertTrue(html.contains("Joint wage basis after deduction"))
+        XCTAssertTrue(html.contains("Acquisition-cost interest"))
         XCTAssertTrue(html.contains("All five steps expanded"))
+        XCTAssertTrue(html.contains("Formula-tax change from projection"))
         XCTAssertTrue(html.contains("Official sources"))
         XCTAssertTrue(html.contains("SKV 433 technical specification, edition 36 (2026)"))
         XCTAssertTrue(html.contains("Skatteverket closely held company dividend rules (2026 reform)"))
@@ -543,7 +585,12 @@ final class TaxCalculatorTests: XCTestCase {
         var plan = IncomePlan(monthlySalary: 93_000)
         plan.entries[0].description = "Employer & Partners"
         plan.entries[0].end = Date2026(month: 10, day: 18)
+        plan.entries[0].useAnnualDailyRateForPartialMonths = true
         plan.entries[0].setVacationAnnualEntitlementDays(30)
+        plan.entries[0].vacationCompensation?.rateBasisPoints = 500
+        plan.entries[0].vacationCompensation?.pensionPremiumOverride = 12_345
+        plan.entries[0].regularPensionPremium?.monthlyOverride = 15_000
+        plan.entries[0].ownCompanySourced = true
         plan.entries[0].adjustmentApplies = true
         plan.entries[0].useFullYearProjectionAsAdjustmentBasis = true
         plan.adjustmentPercent = 33
@@ -553,6 +600,13 @@ final class TaxCalculatorTests: XCTestCase {
         plan.entries[oneTimeIndex].description = "Retention payment"
         plan.entries[oneTimeIndex].amount = 125_000
         plan.entries[oneTimeIndex].additionalWithholdingPerPayment = 2_500
+        plan.entries[oneTimeIndex].salaryExchange = SalaryExchange(
+            sacrificedSalary: 10_000,
+            employerAddsUplift: true,
+            upliftBasisPoints: 580,
+            previousYearPensionSalaryBasis: 1_000_000,
+            pensionAndInsuranceCostsBeforeExchange: 100_000
+        )
 
         let pensionID = plan.addEntry(kind: .monthlyOccupationalPension)
         let pensionIndex = try XCTUnwrap(plan.entries.firstIndex { $0.id == pensionID })
@@ -565,6 +619,9 @@ final class TaxCalculatorTests: XCTestCase {
         let dividendIndex = try XCTUnwrap(plan.entries.firstIndex { $0.id == dividendID })
         plan.entries[dividendIndex].description = "Dividend from Example AB"
         plan.entries[dividendIndex].amount = 78_000
+        plan.dividendAllowance.acquisitionCost = 200_000
+        plan.dividendAllowance.acquisitionCostInterestBasisPoints = 1_155
+        plan.dividendAllowance.savedAllowance = 50_000
 
         let calculation = try RustTaxCore.planCalculation(
             table: 32,

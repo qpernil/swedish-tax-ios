@@ -597,16 +597,6 @@ struct IncomePlan: Codable, Equatable, Sendable {
 
     var isValid: Bool { validationIssue == nil }
 
-    var ownCompanySourcedWorkIncome: UInt32 {
-        entries
-            .filter { $0.kind.isSalary && $0.ownCompanySourced }
-            .reduce(0) { $0.saturatingAdd($1.totalAnnualAmount) }
-    }
-
-    func dividendAllowance2027() throws -> DividendAllowance2027 {
-        try dividendAllowance.calculate(ownerCashSalary2026: ownCompanySourcedWorkIncome)
-    }
-
     var totals: IncomePlanTotals {
         entries.reduce(into: IncomePlanTotals()) { totals, entry in
             let amount = entry.totalAnnualAmount
@@ -803,6 +793,11 @@ struct PlanCalculation: Equatable, Sendable {
     var annualizedTableReferenceTax: UInt32 { tableReferenceTax.saturatingMultiply(12) }
     var effectiveRate: Double {
         ordinaryIncome == 0 ? 0 : Double(ordinaryFinalTax) * 100 / Double(ordinaryIncome)
+    }
+    var employerPensionShareOfBasis: Double {
+        pensionSalaryBasis == 0
+            ? 0
+            : Double(employerPensionContributions) * 100 / Double(pensionSalaryBasis)
     }
     var annualNet: UInt32 { annualIncome.saturatingSubtract(totalTax) }
     var cashAfterWithholding: UInt32 { annualIncome.saturatingSubtract(withheldTax) }

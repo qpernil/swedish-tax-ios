@@ -681,6 +681,39 @@ struct ContentView: View {
                         value: planBinding.dividendAllowance.acquisitionCost,
                         suffix: "SEK"
                     )
+                    if plan.dividendAllowance.acquisitionCost > dividendAcquisitionCostThreshold {
+                        Toggle(
+                            "Use a known 2027 acquisition-cost interest rate",
+                            isOn: Binding(
+                                get: {
+                                    plan.dividendAllowance
+                                        .acquisitionCostInterestBasisPoints != nil
+                                },
+                                set: { enabled in
+                                    planBinding.wrappedValue.dividendAllowance
+                                        .acquisitionCostInterestBasisPoints = enabled ? 900 : nil
+                                }
+                            )
+                        )
+                        if plan.dividendAllowance.acquisitionCostInterestBasisPoints != nil {
+                            BasisPointsPercentageField(
+                                title: "Government borrowing rate plus 9%",
+                                basisPoints: Binding(
+                                    get: {
+                                        plan.dividendAllowance
+                                            .acquisitionCostInterestBasisPoints ?? 900
+                                    },
+                                    set: { value in
+                                        planBinding.wrappedValue.dividendAllowance
+                                            .acquisitionCostInterestBasisPoints = value
+                                    }
+                                )
+                            )
+                        }
+                        Text("Only acquisition cost above \(formatSEK(dividendAcquisitionCostThreshold)) earns interest. Enter the total rate once the 30 November 2026 government borrowing rate is known.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
                     UIntField(
                         title: "Saved allowance",
                         value: planBinding.dividendAllowance.savedAllowance,
@@ -705,15 +738,28 @@ struct ContentView: View {
     @ViewBuilder
     private var dividendAllowanceResult: some View {
         let result: Result<DividendAllowance2027, Error> = Result {
-            try plan.dividendAllowance2027()
+            try RustTaxCore.dividendAllowance(
+                table: table,
+                ageGroup: ageGroup,
+                plan: plan
+            )
         }
 
         switch result {
         case let .success(allowance):
             LabeledContent("Maximum dividend at 20%", value: formatSEK(allowance.total))
                 .fontWeight(.semibold)
-            LabeledContent("Basic amount", value: formatSEK(allowance.basicAmount))
-            LabeledContent("Wage-based allowance", value: formatSEK(allowance.wageAllowance))
+            LabeledContent("Ownership-adjusted basic amount", value: formatSEK(allowance.basicAmount))
+            LabeledContent("Company/group payroll used", value: formatSEK(allowance.companyCashPayroll))
+            LabeledContent("Joint wage basis", value: formatSEK(allowance.jointWageBasis))
+            LabeledContent("Joint wage basis after deduction", value: formatSEK(allowance.jointWageBasisAfterDeduction))
+            LabeledContent("Your wage allowance before cap", value: formatSEK(allowance.wageAllowanceBeforeCap))
+            LabeledContent("Wage-cap salary", value: formatSEK(allowance.wageCapSalary))
+            LabeledContent("50× wage cap", value: formatSEK(allowance.wageCap))
+            LabeledContent("Wage-based allowance used", value: formatSEK(allowance.wageAllowance))
+            LabeledContent("Acquisition-cost interest basis", value: formatSEK(allowance.acquisitionCostInterestBasis))
+            LabeledContent("Acquisition-cost interest", value: formatSEK(allowance.acquisitionCostInterest))
+            LabeledContent("Saved allowance", value: formatSEK(allowance.savedAllowance))
             LabeledContent("Personal tax if fully used", value: formatSEK(allowance.taxAtTwentyPercent))
             LabeledContent("Net after 20% tax", value: formatSEK(allowance.netAfterTwentyPercentTax))
                 .fontWeight(.semibold)
@@ -764,13 +810,26 @@ struct ContentView: View {
         var rows = [
             ValueRow("Taxable salary and pension", formatSEK(value.ordinaryIncome)),
             ValueRow("Own-AB dividend", formatSEK(value.dividendIncome)),
-            ValueRow("Modeled employer pension contributions", formatSEK(value.employerPensionContributions)),
+            ValueRow("Total cash income", formatSEK(value.annualIncome)),
+            ValueRow("SGI annualized recurring salary", formatSEK(value.sgiAnnualRate)),
+            ValueRow("Pension salary basis after exchange", formatSEK(value.pensionSalaryBasis)),
+            ValueRow("Regular pension contributions", formatSEK(value.regularPensionPremiums)),
+            ValueRow("Vacation-payout pension contributions", formatSEK(value.vacationPensionPremiums)),
+            ValueRow("Salary-exchange pension contributions", formatSEK(value.salaryExchangePensionContributions)),
+            ValueRow(
+                "Modeled employer pension contributions",
+                "\(formatSEK(value.employerPensionContributions)) · \(value.employerPensionShareOfBasis.formatted(.number.precision(.fractionLength(2))))% of basis"
+            ),
+            ValueRow(
+                "Effective final tax rate",
+                "\(value.effectiveRate.formatted(.number.precision(.fractionLength(2))))%"
+            ),
             ValueRow("Final tax estimate", formatSEK(value.totalTax)),
             ValueRow("Preliminary tax withheld", formatCredit(value.withheldTax)),
             ValueRow("Cash after withholding", formatSEK(value.cashAfterWithholding))
         ]
         if value.salaryExchangeSacrifice > 0 {
-            rows.insert(ValueRow("Salary exchanged", formatCredit(value.salaryExchangeSacrifice)), at: 2)
+            rows.insert(ValueRow("Salary exchanged", formatCredit(value.salaryExchangeSacrifice)), at: 3)
         }
         if vacationCompensation > 0 {
             rows.insert(

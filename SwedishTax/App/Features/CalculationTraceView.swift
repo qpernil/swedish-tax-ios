@@ -49,10 +49,24 @@ struct CalculationTraceView: View {
                         ValueRows(rows: [ValueRow("Total withheld", formatSEK(withholding.total), isTotal: true)])
                     }
                     TraceStep(number: 3, title: "Annual formula") {
-                        Text("\(formatSEK(calculation.workIncome)) work income + \(formatSEK(calculation.pensionIncome)) pension income")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                        ValueRows(rows: [ValueRow("Formula tax", formatSEK(calculation.annualTax.total), isTotal: true)])
+                        let tax = calculation.annualTax
+                        ValueRows(rows: [
+                            ValueRow("Work income", formatSEK(calculation.workIncome)),
+                            ValueRow("Pension income", formatSEK(calculation.pensionIncome)),
+                            ValueRow("Assessed income", formatSEK(tax.assessedIncome)),
+                            ValueRow("Basic allowance", formatCredit(tax.basicAllowance)),
+                            ValueRow("Taxable income", formatSEK(tax.taxableIncome)),
+                            ValueRow("State income tax", formatSEK(tax.stateIncomeTax)),
+                            ValueRow("Municipal income tax", formatSEK(tax.municipalIncomeTax)),
+                            ValueRow("Burial and religious fee", formatSEK(tax.burialAndReligiousFee)),
+                            ValueRow("Pension fee", formatSEK(tax.pensionFee)),
+                            ValueRow("Pension fee credit", formatCredit(tax.pensionFeeCredit)),
+                            ValueRow("Work income credit", formatCredit(tax.workIncomeCredit)),
+                            ValueRow("Sickness compensation credit", formatCredit(tax.sicknessCompensationCredit)),
+                            ValueRow("Earned income credit", formatCredit(tax.earnedIncomeCredit)),
+                            ValueRow("Public service fee", formatSEK(tax.publicServiceFee)),
+                            ValueRow("Formula tax", formatSEK(tax.total), isTotal: true),
+                        ])
                     }
                     TraceStep(number: 4, title: "Final-tax projection") {
                         if let calibration = calculation.adjustmentCalibration {

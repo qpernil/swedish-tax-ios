@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ios:
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out iOS application
+        uses: actions/checkout@v7
+        with:
+          path: swedish-tax-ios
+
+      - name: Check out Rust tax core
+        uses: actions/checkout@v7
+        with:
+          repository: qpernil/swedish-tax
+          path: swedish-tax
+
+      - name: Install Rust with iOS targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+
+      - name: Build Rust XCFramework
+        working-directory: swedish-tax
+        run: cargo xtask ios --release
+
+      - name: Build iOS application without signing
+        working-directory: swedish-tax-ios
+        run: |
+          xcodebuild -quiet \
+            -project SwedishTax.xcodeproj \
+            -scheme SwedishTax \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=YES \
+            build
+
+      - name: Run iOS simulator tests
+        working-directory: swedish-tax-ios
+        run: |
+          simulator_id="$(
+            xcrun simctl list devices available -j |
+              python3 -c 'import json, sys; data=json.load(sys.stdin); print(next(device["udid"] for runtime in data["devices"].values() for device in runtime if device["name"].startswith("iPhone")))'
+          )"
+          xcodebuild -quiet \
+            -project SwedishTax.xcodeproj \
+            -scheme SwedishTax \
+            -destination "platform=iOS Simulator,id=$simulator_id" \
+            CODE_SIGNING_ALLOWED=NO \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=YES \
+            test

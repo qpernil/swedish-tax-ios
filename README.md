@@ -13,7 +13,9 @@ validation. Swift maps these Rust results and retains input models, formatting a
 arithmetic over final tax results.
 
 The [Blazor client](https://github.com/qpernil/swedish-tax-aspnet) uses the same C ABI
-through P/Invoke in WebAssembly. See the
+through P/Invoke in WebAssembly. Its Rust library is built separately with
+`cargo xtask wasm`; this app uses the XCFramework produced by `cargo xtask ios`.
+Both tasks compile the same shared C interface. See the
 [shared editor contract](https://github.com/qpernil/swedish-tax/blob/master/docs/ffi-plan-support.md)
 and [FFI responsibilities and remaining duplication](https://github.com/qpernil/swedish-tax-aspnet/blob/master/docs/ffi-responsibilities.md).
 Excessive exchange previews use the permitted maximum for the basis and ceiling;

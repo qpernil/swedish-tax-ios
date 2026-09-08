@@ -1,3 +1,4 @@
+import SwedishTaxFFI
 import Foundation
 import CoreGraphics
 import XCTest
@@ -379,46 +380,26 @@ final class TaxCalculatorTests: XCTestCase {
         XCTAssertEqual(try store.load(), expected)
     }
 
-    func testStoreMigratesTheVersionOneSingleCalculationDocument() throws {
+    func testStorePreservesUnreadableWorkspace() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let fileURL = directory.appendingPathComponent("income-plan.json")
-        try FileManager.default.createDirectory(
-            at: directory,
-            withIntermediateDirectories: true
-        )
+        let store = AppStateStore(fileURL: fileURL)
+        let incomplete = Data("{\"documents\":[]}".utf8)
+        try incomplete.write(to: fileURL)
 
-        var legacyPlan = IncomePlan(monthlySalary: 72_500)
-        legacyPlan.adjustmentPercent = 27
-        let legacyDocument: [String: Any] = [
-            "version": 1,
-            "table": 35,
-            "ageGroup": TaxAgeGroup.atLeast66.rawValue,
-            "plan": try XCTUnwrap(
-                JSONSerialization.jsonObject(with: JSONEncoder().encode(legacyPlan))
-            )
-        ]
-        try JSONSerialization.data(withJSONObject: legacyDocument).write(to: fileURL)
-
-        let migrated = try XCTUnwrap(AppStateStore(fileURL: fileURL).load())
-        XCTAssertEqual(migrated.version, PersistedWorkspace.currentVersion)
-        XCTAssertEqual(migrated.documents.count, 1)
-        XCTAssertEqual(migrated.selectedDocument.name, "My calculation")
-        XCTAssertEqual(migrated.selectedDocument.table, 35)
-        XCTAssertEqual(migrated.selectedDocument.ageGroup, .atLeast66)
-        XCTAssertEqual(migrated.selectedDocument.plan, legacyPlan)
+        XCTAssertThrowsError(try store.load())
+        XCTAssertThrowsError(try store.save(PersistedWorkspace()))
+        XCTAssertEqual(try Data(contentsOf: fileURL), incomplete)
     }
 
-    func testStoreRejectsUnsupportedVersionsAndDuplicateDocumentIDs() throws {
+    func testStoreRejectsDuplicateDocumentIDs() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = AppStateStore(fileURL: directory.appendingPathComponent("income-plan.json"))
-
-        XCTAssertThrowsError(try store.save(PersistedWorkspace(version: 99))) { error in
-            XCTAssertEqual(error as? AppStateStoreError, .unsupportedVersion(99))
-        }
 
         let document = CalculationDocument()
         let duplicateIDs = PersistedWorkspace(documents: [document, document])
@@ -490,25 +471,21 @@ final class TaxCalculatorTests: XCTestCase {
         XCTAssertEqual(workspace.documents.count, 1)
     }
 
-    func testPersistedPlanWithoutNewFieldsStillDecodes() throws {
+    func testPersistedPlanRequiresCurrentFields() throws {
         let encoded = try JSONEncoder().encode(IncomePlan(monthlySalary: 55_033))
-        var object = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
-        )
-        object.removeValue(forKey: "dividendAllowance")
+        let original = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        for field in ["dividendAllowance", "nextID"] {
+            var object = original
+            object.removeValue(forKey: field)
+            let incomplete = try JSONSerialization.data(withJSONObject: object)
+            XCTAssertThrowsError(try JSONDecoder().decode(IncomePlan.self, from: incomplete))
+        }
+        var object = original
         var entries = try XCTUnwrap(object["entries"] as? [[String: Any]])
         entries[0].removeValue(forKey: "ownCompanySourced")
-        entries[0].removeValue(forKey: "actualWithholding")
-        entries[0].removeValue(forKey: "useAnnualDailyRateForPartialMonths")
         object["entries"] = entries
-
-        let legacy = try JSONSerialization.data(withJSONObject: object)
-        let restored = try JSONDecoder().decode(IncomePlan.self, from: legacy)
-
-        XCTAssertFalse(restored.entries[0].ownCompanySourced)
-        XCTAssertNil(restored.entries[0].actualWithholding)
-        XCTAssertFalse(restored.entries[0].useAnnualDailyRateForPartialMonths)
-        XCTAssertEqual(restored.dividendAllowance, DividendAllowanceInputs2027())
+        let incomplete = try JSONSerialization.data(withJSONObject: object)
+        XCTAssertThrowsError(try JSONDecoder().decode(IncomePlan.self, from: incomplete))
     }
 
     func testBasisPointPercentagesUseExactTextConversion() {
@@ -659,5 +636,163 @@ final class TaxCalculatorTests: XCTestCase {
         return try XCTUnwrap(
             calculation.withholding.entries.first { $0.entryID == entryID }
         )
+    }
+}
+
+// ARM64 C sizes/offsets for the frozen v1 layouts in SwedishTaxFFI.h.
+// Generated from a native clang sizeof/offsetof probe; Swift must import the same layout.
+extension TaxCalculatorTests {
+    func testPlanningCLayoutsOnARM64() {
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanTotals>.size, 64)
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanTotals>.offset(of: \.work_income), 0)
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanTotals>.offset(of: \.pension_income), 4)
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanTotals>.offset(of: \.dividend_income), 8)
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanTotals>.offset(of: \.sgi_annual_rate), 12)
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanTotals>.offset(of: \.adjustment_basis_work_income), 16)
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanTotals>.offset(of: \.pension_salary_basis), 20)
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanTotals>.offset(of: \.regular_pension_premiums), 24)
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanTotals>.offset(of: \.vacation_pension_premiums), 28)
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanTotals>.offset(of: \.salary_exchange_sacrifice), 32)
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanTotals>.offset(of: \.salary_exchange_pension_contributions), 36)
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanTotals>.offset(of: \.ordinary_income), 40)
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanTotals>.offset(of: \.monthly_taxable_income), 44)
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanTotals>.offset(of: \.gross_income), 48)
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanTotals>.offset(of: \.total_employer_pension_contributions), 52)
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanTotals>.offset(of: \.employer_pension_share_of_basis), 56)
+        XCTAssertEqual(MemoryLayout<SwedishTaxMonthlyAmounts>.size, 48)
+        XCTAssertEqual(MemoryLayout<SwedishTaxMonthlyAmounts>.offset(of: \.january), 0)
+        XCTAssertEqual(MemoryLayout<SwedishTaxMonthlyAmounts>.offset(of: \.february), 4)
+        XCTAssertEqual(MemoryLayout<SwedishTaxMonthlyAmounts>.offset(of: \.march), 8)
+        XCTAssertEqual(MemoryLayout<SwedishTaxMonthlyAmounts>.offset(of: \.april), 12)
+        XCTAssertEqual(MemoryLayout<SwedishTaxMonthlyAmounts>.offset(of: \.may), 16)
+        XCTAssertEqual(MemoryLayout<SwedishTaxMonthlyAmounts>.offset(of: \.june), 20)
+        XCTAssertEqual(MemoryLayout<SwedishTaxMonthlyAmounts>.offset(of: \.july), 24)
+        XCTAssertEqual(MemoryLayout<SwedishTaxMonthlyAmounts>.offset(of: \.august), 28)
+        XCTAssertEqual(MemoryLayout<SwedishTaxMonthlyAmounts>.offset(of: \.september), 32)
+        XCTAssertEqual(MemoryLayout<SwedishTaxMonthlyAmounts>.offset(of: \.october), 36)
+        XCTAssertEqual(MemoryLayout<SwedishTaxMonthlyAmounts>.offset(of: \.november), 40)
+        XCTAssertEqual(MemoryLayout<SwedishTaxMonthlyAmounts>.offset(of: \.december), 44)
+        XCTAssertEqual(MemoryLayout<SwedishTaxExchangeAllowance>.size, 72)
+        XCTAssertEqual(MemoryLayout<SwedishTaxExchangeAllowance>.offset(of: \.ceiling), 0)
+        XCTAssertEqual(MemoryLayout<SwedishTaxExchangeAllowance>.offset(of: \.pension_salary_basis_before), 4)
+        XCTAssertEqual(MemoryLayout<SwedishTaxExchangeAllowance>.offset(of: \.pension_salary_basis_after), 8)
+        XCTAssertEqual(MemoryLayout<SwedishTaxExchangeAllowance>.offset(of: \.previous_year_pension_salary_basis), 12)
+        XCTAssertEqual(MemoryLayout<SwedishTaxExchangeAllowance>.offset(of: \.pension_and_insurance_costs_before_exchange), 20)
+        XCTAssertEqual(MemoryLayout<SwedishTaxExchangeAllowance>.offset(of: \.pension_contributions_before), 28)
+        XCTAssertEqual(MemoryLayout<SwedishTaxExchangeAllowance>.offset(of: \.regular_pension_premiums), 32)
+        XCTAssertEqual(MemoryLayout<SwedishTaxExchangeAllowance>.offset(of: \.vacation_pension_premiums), 36)
+        XCTAssertEqual(MemoryLayout<SwedishTaxExchangeAllowance>.offset(of: \.other_exchange_contributions), 40)
+        XCTAssertEqual(MemoryLayout<SwedishTaxExchangeAllowance>.offset(of: \.selected_exchange_contribution), 44)
+        XCTAssertEqual(MemoryLayout<SwedishTaxExchangeAllowance>.offset(of: \.total_employer_pension_contributions), 48)
+        XCTAssertEqual(MemoryLayout<SwedishTaxExchangeAllowance>.offset(of: \.available_contribution), 52)
+        XCTAssertEqual(MemoryLayout<SwedishTaxExchangeAllowance>.offset(of: \.maximum_sacrifice), 56)
+        XCTAssertEqual(MemoryLayout<SwedishTaxExchangeAllowance>.offset(of: \.contribution_share_of_basis), 64)
+        XCTAssertEqual(MemoryLayout<SwedishTaxEntrySupport>.size, 208)
+        XCTAssertEqual(MemoryLayout<SwedishTaxEntrySupport>.offset(of: \.status), 0)
+        XCTAssertEqual(MemoryLayout<SwedishTaxEntrySupport>.offset(of: \.entry_id), 8)
+        XCTAssertEqual(MemoryLayout<SwedishTaxEntrySupport>.offset(of: \.annual_amount), 16)
+        XCTAssertEqual(MemoryLayout<SwedishTaxEntrySupport>.offset(of: \.total_annual_amount), 20)
+        XCTAssertEqual(MemoryLayout<SwedishTaxEntrySupport>.offset(of: \.withholding_payment_count), 24)
+        XCTAssertEqual(MemoryLayout<SwedishTaxEntrySupport>.offset(of: \.requested_additional_withholding), 28)
+        XCTAssertEqual(MemoryLayout<SwedishTaxEntrySupport>.offset(of: \.vacation_compensation_amount), 32)
+        XCTAssertEqual(MemoryLayout<SwedishTaxEntrySupport>.offset(of: \.regular_pension_premium_amount), 36)
+        XCTAssertEqual(MemoryLayout<SwedishTaxEntrySupport>.offset(of: \.vacation_pension_premium_amount), 40)
+        XCTAssertEqual(MemoryLayout<SwedishTaxEntrySupport>.offset(of: \.salary_exchange_sacrifice), 44)
+        XCTAssertEqual(MemoryLayout<SwedishTaxEntrySupport>.offset(of: \.salary_exchange_pension_contribution), 48)
+        XCTAssertEqual(MemoryLayout<SwedishTaxEntrySupport>.offset(of: \.pension_salary_basis_amount), 52)
+        XCTAssertEqual(MemoryLayout<SwedishTaxEntrySupport>.offset(of: \.full_year_adjustment_basis_amount), 56)
+        XCTAssertEqual(MemoryLayout<SwedishTaxEntrySupport>.offset(of: \.is_valid), 60)
+        XCTAssertEqual(MemoryLayout<SwedishTaxEntrySupport>.offset(of: \.pension_benchmark_monthly), 64)
+        XCTAssertEqual(MemoryLayout<SwedishTaxEntrySupport>.offset(of: \.suggested_vacation_days), 68)
+        XCTAssertEqual(MemoryLayout<SwedishTaxEntrySupport>.offset(of: \.vacation_amount_per_day), 72)
+        XCTAssertEqual(MemoryLayout<SwedishTaxEntrySupport>.offset(of: \.monthly_amounts), 80)
+        XCTAssertEqual(MemoryLayout<SwedishTaxEntrySupport>.offset(of: \.has_allowance), 128)
+        XCTAssertEqual(MemoryLayout<SwedishTaxEntrySupport>.offset(of: \.allowance), 136)
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanSupport>.size, 128)
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanSupport>.offset(of: \.status), 0)
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanSupport>.offset(of: \.issue_kind), 4)
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanSupport>.offset(of: \.issue_entry_id), 8)
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanSupport>.offset(of: \.issue_maximum), 16)
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanSupport>.offset(of: \.totals), 24)
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanSupport>.offset(of: \.has_uniform_monthly_table_reference), 88)
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanSupport>.offset(of: \.salary_column), 92)
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanSupport>.offset(of: \.pension_column), 96)
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanSupport>.offset(of: \.entries), 104)
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanSupport>.offset(of: \.entries_count), 112)
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanSupport>.offset(of: \.entries_capacity), 120)
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanningPolicy>.size, 20)
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanningPolicy>.offset(of: \.regular_pension_monthly_threshold), 0)
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanningPolicy>.offset(of: \.default_vacation_rate_basis_points), 4)
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanningPolicy>.offset(of: \.default_exchange_uplift_basis_points), 8)
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanningPolicy>.offset(of: \.employer_pension_allowance_maximum), 12)
+        XCTAssertEqual(MemoryLayout<SwedishTaxPlanningPolicy>.offset(of: \.acquisition_cost_threshold), 16)
+    }
+
+    func testInvalidExchangeUsesClampedRustPreviewAndPreservesSavedRequest() throws {
+        var plan = IncomePlan(monthlySalary: 93_000)
+        let id = plan.addEntry(kind: .oneTimeSalary)
+        plan.entries[1].amount = 372_000
+        plan.entries[1].includedInPensionSalaryBasis = true
+        plan.entries[1].salaryExchange = SalaryExchange()
+        plan.entries[1].salaryExchange?.sacrificedSalary = .max
+        let saved = try JSONEncoder().encode(plan)
+        let allowance = try XCTUnwrap(plan.salaryExchangeAllowance(for: id))
+        XCTAssertEqual(allowance.ceiling, 434890)
+        XCTAssertEqual(allowance.pensionSalaryBasisBefore, 1488000)
+        XCTAssertEqual(allowance.pensionSalaryBasisAfter, 1242544)
+        XCTAssertEqual(allowance.maximumSacrifice, 245456)
+        XCTAssertEqual(allowance.pensionContributionsBefore, 175296)
+        XCTAssertEqual(allowance.availableContribution, 259594)
+        XCTAssertEqual(plan.validationIssue, .salaryExchangeExceedsAllowance(entryID: id, maximum: allowance.maximumSacrifice))
+        XCTAssertEqual(plan.entries[1].salaryExchangeSacrifice, 372_000)
+        XCTAssertEqual(plan.totals.workIncome, 1_116_000)
+        XCTAssertThrowsError(try RustTaxCore.planCalculation(table: 32, ageGroup: .under66, plan: plan))
+        XCTAssertEqual(try JSONDecoder().decode(IncomePlan.self, from: saved), plan)
+        XCTAssertEqual(plan.entries[1].salaryExchange?.sacrificedSalary, .max)
+        plan.entries[1].salaryExchange?.sacrificedSalary = allowance.maximumSacrifice
+        XCTAssertNil(plan.validationIssue)
+        XCTAssertNoThrow(try RustTaxCore.planCalculation(table: 32, ageGroup: .under66, plan: plan))
+    }
+
+    func testSupportRetainsInvalidPeriodRowsAndCopiesOwnedBuffers() throws {
+        var plan = IncomePlan(monthlySalary: 55_033)
+        plan.entries[0] = IncomeEntry(id: .max, kind: .monthlySalary)
+        plan.entries[0].amount = 55_033
+        plan.entries[0].start = Date2026(month: 12, day: 1)
+        plan.entries[0].end = Date2026(month: 1, day: 1)
+        for _ in 0..<1000 {
+            let support = try RustTaxCore.planSupport(plan)
+            XCTAssertEqual(support.issue, .invalidPaymentPeriod(entryID: .max))
+            XCTAssertEqual(support.entries.count, 1)
+            XCTAssertEqual(support.entries[0].entry_id, .max)
+            XCTAssertEqual(support.entries[0].annual_amount, 0)
+            XCTAssertEqual(support.totals.workIncome, 0)
+        }
+    }
+
+    func testExchangePriorYearConfirmedCostsAndSaturationMatchSharedFixtures() throws {
+        var plan = IncomePlan(monthlySalary: 93_000)
+        _ = plan.addEntry(kind: .oneTimeSalary)
+        plan.entries[1].amount = 372_000
+        plan.entries[1].includedInPensionSalaryBasis = true
+        plan.entries[1].salaryExchange = SalaryExchange()
+        plan.entries[1].salaryExchange?.sacrificedSalary = .max
+        plan.entries[1].salaryExchange?.previousYearPensionSalaryBasis = 1_092_000
+        plan.entries[1].salaryExchange?.pensionAndInsuranceCostsBeforeExchange = 158_170
+        let confirmed = try XCTUnwrap(plan.salaryExchangeAllowance(for: plan.entries[1].id))
+        XCTAssertEqual(confirmed.ceiling, 382200)
+        XCTAssertEqual(confirmed.pensionSalaryBasisAfter, 1092000)
+        XCTAssertEqual(confirmed.maximumSacrifice, 211829)
+        XCTAssertEqual(confirmed.pensionContributionsBefore, 158170)
+        plan.entries[0].amount = .max
+        plan.entries[1].amount = .max
+        plan.entries[1].salaryExchange?.previousYearPensionSalaryBasis = nil
+        plan.entries[1].salaryExchange?.pensionAndInsuranceCostsBeforeExchange = nil
+        let saturated = try XCTUnwrap(plan.salaryExchangeAllowance(for: plan.entries[1].id))
+        XCTAssertEqual(saturated.ceiling, 592000)
+        XCTAssertEqual(saturated.pensionSalaryBasisBefore, 4294967295)
+        XCTAssertEqual(saturated.pensionSalaryBasisAfter, 4294967295)
+        XCTAssertEqual(saturated.maximumSacrifice, 0)
+        XCTAssertEqual(plan.entries[1].salaryExchange?.sacrificedSalary, .max)
     }
 }

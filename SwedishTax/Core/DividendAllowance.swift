@@ -1,4 +1,4 @@
-let dividendAcquisitionCostThreshold: UInt32 = 100_000
+let dividendAcquisitionCostThreshold = RustTaxCore.planningPolicy.acquisition_cost_threshold
 
 struct DividendAllowanceInputs2027: Codable, Equatable, Sendable {
     var onePersonCompany = true

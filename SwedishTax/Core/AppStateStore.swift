@@ -29,14 +29,10 @@ struct CalculationDocument: Codable, Identifiable, Equatable, Sendable {
 }
 
 struct PersistedWorkspace: Codable, Equatable, Sendable {
-    static let currentVersion = 2
-
-    var version: Int
     var selectedDocumentID: UUID
     var documents: [CalculationDocument]
 
     init(
-        version: Int = currentVersion,
         selectedDocumentID: UUID? = nil,
         documents: [CalculationDocument]? = nil
     ) {
@@ -46,7 +42,6 @@ struct PersistedWorkspace: Codable, Equatable, Sendable {
         } else {
             initialDocuments = [CalculationDocument()]
         }
-        self.version = version
         self.documents = initialDocuments
         self.selectedDocumentID = selectedDocumentID ?? initialDocuments[0].id
     }
@@ -125,7 +120,6 @@ struct PersistedWorkspace: Codable, Equatable, Sendable {
 }
 
 enum AppStateStoreError: Error, Equatable {
-    case unsupportedVersion(Int)
     case invalidTaxTable(UInt8)
     case invalidWorkspace
 }
@@ -138,32 +132,15 @@ struct AppStateStore: Sendable {
     func load() throws -> PersistedWorkspace? {
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
         let data = try Data(contentsOf: fileURL)
-        let version = try JSONDecoder().decode(VersionEnvelope.self, from: data).version
-
-        switch version {
-        case PersistedWorkspace.currentVersion:
-            let workspace = try JSONDecoder().decode(PersistedWorkspace.self, from: data)
-            try validate(workspace)
-            return workspace
-        case LegacyAppState.currentVersion:
-            let legacy = try JSONDecoder().decode(LegacyAppState.self, from: data)
-            guard supportedTaxTables.contains(legacy.table) else {
-                throw AppStateStoreError.invalidTaxTable(legacy.table)
-            }
-            return PersistedWorkspace(documents: [
-                CalculationDocument(
-                    table: legacy.table,
-                    ageGroup: legacy.ageGroup,
-                    plan: legacy.plan
-                )
-            ])
-        default:
-            throw AppStateStoreError.unsupportedVersion(version)
-        }
+        let workspace = try JSONDecoder().decode(PersistedWorkspace.self, from: data)
+        try validate(workspace)
+        return workspace
     }
 
     func save(_ workspace: PersistedWorkspace) throws {
         try validate(workspace)
+        // Preserve an existing unreadable workspace instead of overwriting it with defaults.
+        _ = try load()
         let directory = fileURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(
             at: directory,
@@ -176,9 +153,6 @@ struct AppStateStore: Sendable {
     }
 
     private func validate(_ workspace: PersistedWorkspace) throws {
-        guard workspace.version == PersistedWorkspace.currentVersion else {
-            throw AppStateStoreError.unsupportedVersion(workspace.version)
-        }
         let documentIDs = Set(workspace.documents.map(\.id))
         guard
             !workspace.documents.isEmpty,
@@ -202,17 +176,4 @@ struct AppStateStore: Sendable {
             .appendingPathComponent(directoryName, isDirectory: true)
             .appendingPathComponent("income-plan.json", isDirectory: false)
     }
-}
-
-private struct VersionEnvelope: Decodable {
-    var version: Int
-}
-
-private struct LegacyAppState: Decodable {
-    static let currentVersion = 1
-
-    var version: Int
-    var table: UInt8
-    var ageGroup: TaxAgeGroup
-    var plan: IncomePlan
 }

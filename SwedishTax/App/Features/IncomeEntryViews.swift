@@ -476,6 +476,12 @@ struct IncomeEntryEditor: View {
                         suffix: "SEK",
                         maximum: allowance.maximumSacrifice
                     )
+                    if let requested = entry.wrappedValue.salaryExchange?.sacrificedSalary,
+                       requested > allowance.maximumSacrifice {
+                        Text("Basis and ceiling preview use the permitted maximum. The saved exchange must be corrected before calculating tax.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
                     Button("Use maximum: \(formatSEK(allowance.maximumSacrifice))") {
                         entry.wrappedValue.salaryExchange?.sacrificedSalary = allowance.maximumSacrifice
                     }

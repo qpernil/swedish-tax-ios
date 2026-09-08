@@ -1,3 +1,4 @@
+import SwedishTaxFFI
 import Foundation
 
 struct Date2026: Codable, Equatable, Comparable, Sendable {
@@ -98,7 +99,7 @@ enum PayerRole: String, Codable, CaseIterable, Identifiable, Sendable {
 }
 
 struct RegularPensionPremium: Codable, Equatable, Sendable {
-    static let monthlyThreshold: UInt32 = 52_125
+    static let monthlyThreshold = RustTaxCore.planningPolicy.regular_pension_monthly_threshold
     var monthlyOverride: UInt32?
 
     init(monthlyOverride: UInt32? = nil) {
@@ -106,72 +107,25 @@ struct RegularPensionPremium: Codable, Equatable, Sendable {
     }
 
     static func benchmarkMonthly(_ monthlySalary: UInt32) -> UInt32 {
-        let lower = min(monthlySalary, monthlyThreshold)
-        let upper = monthlySalary.saturatingSubtract(monthlyThreshold)
-        let numerator = UInt64(lower) * 450 + UInt64(upper) * 3_000
-        return UInt32(min((numerator + 5_000) / 10_000, UInt64(UInt32.max)))
-    }
-
-    func monthlyAmount(for monthlySalary: UInt32) -> UInt32 {
-        monthlyOverride ?? Self.benchmarkMonthly(monthlySalary)
+        var entry = IncomeEntry(id: 0, kind: .monthlySalary)
+        entry.amount = monthlySalary
+        return RustTaxCore.entrySupport(entry).pension_benchmark_monthly
     }
 }
 
 struct SalaryExchange: Codable, Equatable, Sendable {
-    static let defaultUpliftBasisPoints: UInt32 = 576
-    static let allowanceMaximum: UInt32 = 592_000
+    static let defaultUpliftBasisPoints = RustTaxCore.planningPolicy.default_exchange_uplift_basis_points
+    static let allowanceMaximum = RustTaxCore.planningPolicy.employer_pension_allowance_maximum
 
     var sacrificedSalary: UInt32 = 0
     var employerAddsUplift = true
     var upliftBasisPoints: UInt32 = defaultUpliftBasisPoints
     var previousYearPensionSalaryBasis: UInt32?
     var pensionAndInsuranceCostsBeforeExchange: UInt32?
-
-    var pensionContribution: UInt32 {
-        employerAddsUplift
-            ? roundedBasisPoints(
-                sacrificedSalary,
-                UInt32(10_000).saturatingAdd(upliftBasisPoints)
-            )
-            : sacrificedSalary
-    }
-
-    static func allowanceCeiling(pensionSalaryBasis: UInt32) -> UInt32 {
-        min(
-            UInt32(UInt64(pensionSalaryBasis) * 3_500 / 10_000),
-            allowanceMaximum
-        )
-    }
-
-    func maximumSacrifice(
-        paymentAmount: UInt32,
-        pensionSalaryBasisBefore: UInt32,
-        pensionContributionsBefore: UInt32,
-        paymentIsPensionable: Bool
-    ) -> UInt32 {
-        var low: UInt32 = 0
-        var high = paymentAmount
-        while low < high {
-            let candidate = low + (high - low + 1) / 2
-            let basisAfter = previousYearPensionSalaryBasis ?? (
-                paymentIsPensionable
-                    ? pensionSalaryBasisBefore.saturatingSubtract(candidate)
-                    : pensionSalaryBasisBefore
-            )
-            var proposal = self
-            proposal.sacrificedSalary = candidate
-            let valid = pensionContributionsBefore
-                .saturatingAdd(proposal.pensionContribution) <= Self.allowanceCeiling(
-                    pensionSalaryBasis: basisAfter
-                )
-            if valid { low = candidate } else { high = candidate - 1 }
-        }
-        return low
-    }
 }
 
 struct VacationCompensation: Codable, Equatable, Sendable {
-    static let defaultRateBasisPoints: UInt32 = 540
+    static let defaultRateBasisPoints = RustTaxCore.planningPolicy.default_vacation_rate_basis_points
 
     var annualEntitlementDays: UInt32
     var payoutDays: UInt32
@@ -189,25 +143,18 @@ struct VacationCompensation: Codable, Equatable, Sendable {
         start: Date2026,
         end: Date2026
     ) -> UInt32 {
-        let first = start.clamped
-        let last = end.clamped
-        guard first <= last else { return 0 }
-        let employmentDays = UInt32(last.ordinal - first.ordinal + 1)
-        return annualEntitlementDays.saturatingMultiply(employmentDays).saturatingAdd(364) / 365
-    }
-
-    func amount(monthlySalary: UInt32) -> UInt32 {
-        let salaryDays = UInt64(monthlySalary).multipliedReportingOverflow(
-            by: UInt64(payoutDays)
-        )
-        let numerator = (salaryDays.overflow ? UInt64.max : salaryDays.partialValue)
-            .multipliedReportingOverflow(by: UInt64(rateBasisPoints ?? Self.defaultRateBasisPoints))
-        let unrounded = numerator.overflow ? UInt64.max : numerator.partialValue
-        let rounded = unrounded.addingReportingOverflow(5_000)
-        return UInt32(min(
-            (rounded.overflow ? UInt64.max : rounded.partialValue) / 10_000,
-            UInt64(UInt32.max)
-        ))
+        // Set raw input without invoking this initializer recursively.
+        var vacation = SwedishTaxVacationCompensation()
+        vacation.is_some = 1
+        vacation.annual_entitlement_days = annualEntitlementDays
+        var input = SwedishTaxIncomeEntry()
+        input.kind = 1
+        input.start = SwedishTaxDate(month: UInt32(start.month), day: UInt32(start.day))
+        input.end = SwedishTaxDate(month: UInt32(end.month), day: UInt32(end.day))
+        input.vacation_compensation = vacation
+        let result = swedish_tax_entry_support(&input)
+        precondition(result.status == 0)
+        return result.suggested_vacation_days
     }
 }
 
@@ -238,194 +185,28 @@ struct IncomeEntry: Codable, Identifiable, Equatable, Sendable {
         includedInPensionSalaryBasis = salary
     }
 
-    private enum CodingKeys: String, CodingKey {
-        case id, description, kind, amount, start, end
-        case useAnnualDailyRateForPartialMonths, payerRole
-        case ownCompanySourced, adjustmentApplies
-        case useFullYearProjectionAsAdjustmentBasis, additionalWithholdingPerPayment
-        case actualWithholding, vacationCompensation, regularPensionPremium
-        case salaryExchange, includedInPensionSalaryBasis
-    }
 
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        let id = try values.decode(UInt64.self, forKey: .id)
-        let kind = try values.decode(IncomeKind.self, forKey: .kind)
-        self.init(id: id, kind: kind)
-        description = try values.decodeIfPresent(String.self, forKey: .description) ?? ""
-        amount = try values.decodeIfPresent(UInt32.self, forKey: .amount) ?? 0
-        start = try values.decodeIfPresent(Date2026.self, forKey: .start)
-            ?? Date2026(month: 1, day: 1)
-        end = try values.decodeIfPresent(Date2026.self, forKey: .end)
-            ?? Date2026(month: 12, day: 31)
-        useAnnualDailyRateForPartialMonths = try values.decodeIfPresent(
-            Bool.self,
-            forKey: .useAnnualDailyRateForPartialMonths
-        ) ?? false
-        payerRole = try values.decodeIfPresent(PayerRole.self, forKey: .payerRole) ?? .main
-        ownCompanySourced = try values.decodeIfPresent(
-            Bool.self,
-            forKey: .ownCompanySourced
-        ) ?? false
-        adjustmentApplies = try values.decodeIfPresent(
-            Bool.self,
-            forKey: .adjustmentApplies
-        ) ?? false
-        useFullYearProjectionAsAdjustmentBasis = try values.decodeIfPresent(
-            Bool.self,
-            forKey: .useFullYearProjectionAsAdjustmentBasis
-        ) ?? false
-        additionalWithholdingPerPayment = try values.decodeIfPresent(
-            UInt32.self,
-            forKey: .additionalWithholdingPerPayment
-        )
-        actualWithholding = try values.decodeIfPresent(UInt32.self, forKey: .actualWithholding)
-        vacationCompensation = try values.decodeIfPresent(
-            VacationCompensation.self,
-            forKey: .vacationCompensation
-        )
-        regularPensionPremium = try values.decodeIfPresent(
-            RegularPensionPremium.self,
-            forKey: .regularPensionPremium
-        )
-        salaryExchange = try values.decodeIfPresent(SalaryExchange.self, forKey: .salaryExchange)
-        includedInPensionSalaryBasis = try values.decodeIfPresent(
-            Bool.self,
-            forKey: .includedInPensionSalaryBasis
-        ) ?? kind.isSalary
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var values = encoder.container(keyedBy: CodingKeys.self)
-        try values.encode(id, forKey: .id)
-        try values.encode(description, forKey: .description)
-        try values.encode(kind, forKey: .kind)
-        try values.encode(amount, forKey: .amount)
-        try values.encode(start, forKey: .start)
-        try values.encode(end, forKey: .end)
-        try values.encode(
-            useAnnualDailyRateForPartialMonths,
-            forKey: .useAnnualDailyRateForPartialMonths
-        )
-        try values.encode(payerRole, forKey: .payerRole)
-        try values.encode(ownCompanySourced, forKey: .ownCompanySourced)
-        try values.encode(adjustmentApplies, forKey: .adjustmentApplies)
-        try values.encode(
-            useFullYearProjectionAsAdjustmentBasis,
-            forKey: .useFullYearProjectionAsAdjustmentBasis
-        )
-        try values.encodeIfPresent(
-            additionalWithholdingPerPayment,
-            forKey: .additionalWithholdingPerPayment
-        )
-        try values.encodeIfPresent(actualWithholding, forKey: .actualWithholding)
-        try values.encodeIfPresent(vacationCompensation, forKey: .vacationCompensation)
-        try values.encodeIfPresent(regularPensionPremium, forKey: .regularPensionPremium)
-        try values.encodeIfPresent(salaryExchange, forKey: .salaryExchange)
-        try values.encode(includedInPensionSalaryBasis, forKey: .includedInPensionSalaryBasis)
-    }
+    private var support: SwedishTaxEntrySupport { RustTaxCore.entrySupport(self) }
 
     func amount(forMonth month: UInt8) -> UInt32 {
-        guard kind.isMonthly, start <= end, (1...12).contains(month) else { return 0 }
-        let first = start.clamped
-        let last = end.clamped
-        guard month >= first.month, month <= last.month else { return 0 }
-        let firstDay: UInt8 = month == first.month ? first.day : 1
-        let lastDay: UInt8 = month == last.month ? last.day : Date2026.daysInMonth(month)
-        let activeDays = UInt32(lastDay - firstDay + 1)
-        return proratedPartialMonthValue(month: month, value: amount, activeDays: activeDays)
+        guard (1...12).contains(month) else { return 0 }
+        let m = support.monthly_amounts
+        return [m.january, m.february, m.march, m.april, m.may, m.june,
+                m.july, m.august, m.september, m.october, m.november, m.december][Int(month) - 1]
     }
 
-    var annualAmount: UInt32 {
-        kind.isMonthly
-            ? (1...12).reduce(0) { $0.saturatingAdd(amount(forMonth: UInt8($1))) }
-            : amount
-    }
-
-    var withholdingPaymentCount: UInt32 {
-        switch kind {
-        case .annualSalary, .annualOccupationalPension:
-            return 12
-        case .monthlySalary, .monthlyOccupationalPension:
-            guard start.clamped <= end.clamped else { return 0 }
-            return UInt32(end.clamped.month - start.clamped.month + 1)
-        case .oneTimeSalary:
-            return 1
-        case .ownCompanyDividend:
-            return 0
-        }
-    }
-
-    var requestedAdditionalWithholding: UInt32 {
-        (additionalWithholdingPerPayment ?? 0).saturatingMultiply(withholdingPaymentCount)
-    }
-
-    var isValid: Bool { !kind.isMonthly || start.clamped <= end.clamped }
-
-    var totalAnnualAmount: UInt32 {
-        annualAmount.saturatingAdd(vacationCompensationAmount)
-            .saturatingSubtract(salaryExchangeSacrifice)
-    }
-
-    var fullYearAdjustmentBasisAmount: UInt32 {
-        guard useFullYearProjectionAsAdjustmentBasis else { return 0 }
-        return switch kind {
-        case .monthlySalary: amount.saturatingMultiply(12)
-        case .annualSalary: amount
-        default: 0
-        }
-    }
-
-    var vacationCompensationAmount: UInt32 {
-        guard kind == .monthlySalary else { return 0 }
-        return vacationCompensation?.amount(monthlySalary: amount) ?? 0
-    }
-
-    var regularPensionPremiumAmount: UInt32 {
-        guard let premium = regularPensionPremium else { return 0 }
-        switch kind {
-        case .annualSalary:
-            return premium.monthlyAmount(for: amount / 12).saturatingMultiply(12)
-        case .monthlySalary:
-            let monthly = premium.monthlyAmount(for: amount)
-            return (1...12).reduce(0) { total, month in
-                total.saturatingAdd(proratedMonthlyValue(month: UInt8(month), value: monthly))
-            }
-        default: return 0
-        }
-    }
-
-    var vacationPensionPremiumAmount: UInt32 {
-        guard
-            kind == .monthlySalary,
-            let vacationCompensation,
-            vacationCompensation.includedInPensionSalaryBasis
-        else { return 0 }
-        if let actual = vacationCompensation.pensionPremiumOverride { return actual }
-        return RegularPensionPremium.benchmarkMonthly(amount.saturatingAdd(vacationCompensationAmount))
-            .saturatingSubtract(RegularPensionPremium.benchmarkMonthly(amount))
-    }
-
-    var pensionSalaryBasisAmount: UInt32 {
-        let regular = includedInPensionSalaryBasis
-            ? annualAmount.saturatingSubtract(salaryExchangeSacrifice)
-            : 0
-        let vacation = vacationCompensation?.includedInPensionSalaryBasis == true
-            ? vacationCompensationAmount
-            : 0
-        return regular.saturatingAdd(vacation)
-    }
-
-    var salaryExchangeSacrifice: UInt32 {
-        guard kind == .oneTimeSalary else { return 0 }
-        return min(salaryExchange?.sacrificedSalary ?? 0, amount)
-    }
-
-    var salaryExchangePensionContribution: UInt32 {
-        guard kind == .oneTimeSalary, var exchange = salaryExchange else { return 0 }
-        exchange.sacrificedSalary = min(exchange.sacrificedSalary, amount)
-        return exchange.pensionContribution
-    }
+    var annualAmount: UInt32 { support.annual_amount }
+    var withholdingPaymentCount: UInt32 { support.withholding_payment_count }
+    var requestedAdditionalWithholding: UInt32 { support.requested_additional_withholding }
+    var totalAnnualAmount: UInt32 { support.total_annual_amount }
+    var fullYearAdjustmentBasisAmount: UInt32 { support.full_year_adjustment_basis_amount }
+    var vacationCompensationAmount: UInt32 { support.vacation_compensation_amount }
+    var regularPensionPremiumAmount: UInt32 { support.regular_pension_premium_amount }
+    var vacationPensionPremiumAmount: UInt32 { support.vacation_pension_premium_amount }
+    var pensionSalaryBasisAmount: UInt32 { support.pension_salary_basis_amount }
+    var salaryExchangeSacrifice: UInt32 { support.salary_exchange_sacrifice }
+    var salaryExchangePensionContribution: UInt32 { support.salary_exchange_pension_contribution }
+    var isValid: Bool { support.is_valid != 0 }
 
     mutating func prepareForKindChange(
         from previous: IncomeKind,
@@ -468,34 +249,6 @@ struct IncomeEntry: Codable, Identifiable, Equatable, Sendable {
                 end: end
             )
     }
-
-    private func proratedMonthlyValue(month: UInt8, value: UInt32) -> UInt32 {
-        guard start <= end, (1...12).contains(month) else { return 0 }
-        let first = start.clamped
-        let last = end.clamped
-        guard month >= first.month, month <= last.month else { return 0 }
-        let firstDay: UInt8 = month == first.month ? first.day : 1
-        let lastDay: UInt8 = month == last.month ? last.day : Date2026.daysInMonth(month)
-        return proratedPartialMonthValue(
-            month: month,
-            value: value,
-            activeDays: UInt32(lastDay - firstDay + 1)
-        )
-    }
-
-    private func proratedPartialMonthValue(
-        month: UInt8,
-        value: UInt32,
-        activeDays: UInt32
-    ) -> UInt32 {
-        let daysInMonth = UInt32(Date2026.daysInMonth(month))
-        if activeDays == daysInMonth { return value }
-        if useAnnualDailyRateForPartialMonths {
-            let numerator = UInt64(value) * 12 * UInt64(activeDays)
-            return UInt32(min((numerator + 182) / 365, UInt64(UInt32.max)))
-        }
-        return value.saturatingMultiply(activeDays) / daysInMonth
-    }
 }
 
 enum IncomePlanValidationIssue: Equatable, Sendable {
@@ -508,31 +261,6 @@ struct IncomePlan: Codable, Equatable, Sendable {
     var adjustmentPercent: UInt32?
     var dividendAllowance = DividendAllowanceInputs2027()
     private var nextID: UInt64
-
-    private enum CodingKeys: String, CodingKey {
-        case entries, adjustmentPercent, dividendAllowance, nextID
-    }
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        entries = try values.decode([IncomeEntry].self, forKey: .entries)
-        adjustmentPercent = try values.decodeIfPresent(UInt32.self, forKey: .adjustmentPercent)
-        dividendAllowance = try values.decodeIfPresent(
-            DividendAllowanceInputs2027.self,
-            forKey: .dividendAllowance
-        ) ?? DividendAllowanceInputs2027()
-        nextID = try values.decodeIfPresent(UInt64.self, forKey: .nextID)
-            ?? entries.map(\.id).max().map { $0 == .max ? .max : $0 + 1 }
-            ?? 1
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var values = encoder.container(keyedBy: CodingKeys.self)
-        try values.encode(entries, forKey: .entries)
-        try values.encodeIfPresent(adjustmentPercent, forKey: .adjustmentPercent)
-        try values.encode(dividendAllowance, forKey: .dividendAllowance)
-        try values.encode(nextID, forKey: .nextID)
-    }
 
     init(monthlySalary: UInt32) {
         var entry = IncomeEntry(id: 1, kind: .monthlySalary)
@@ -579,98 +307,30 @@ struct IncomePlan: Codable, Equatable, Sendable {
         if entries.isEmpty { addEntry() }
     }
 
-    var validationIssue: IncomePlanValidationIssue? {
-        for entry in entries where !entry.isValid {
-            return .invalidPaymentPeriod(entryID: entry.id)
-        }
-        for entry in entries where entry.salaryExchange != nil {
-            guard let allowance = salaryExchangeAllowance(for: entry.id) else { continue }
-            if entry.salaryExchangeSacrifice > allowance.maximumSacrifice {
-                return .salaryExchangeExceedsAllowance(
-                    entryID: entry.id,
-                    maximum: allowance.maximumSacrifice
-                )
-            }
-        }
-        return nil
+    private var support: RustTaxCore.PlanSupport {
+        // Failure indicates an incompatible native integration, not a plan validation issue.
+        do { return try RustTaxCore.planSupport(self) }
+        catch { preconditionFailure("Rust planning support failed: \(error)") }
     }
 
+    var validationIssue: IncomePlanValidationIssue? { support.issue }
     var isValid: Bool { validationIssue == nil }
-
-    var totals: IncomePlanTotals {
-        entries.reduce(into: IncomePlanTotals()) { totals, entry in
-            let amount = entry.totalAnnualAmount
-            totals.regularPensionPremiums = totals.regularPensionPremiums
-                .saturatingAdd(entry.regularPensionPremiumAmount)
-            totals.vacationPensionPremiums = totals.vacationPensionPremiums
-                .saturatingAdd(entry.vacationPensionPremiumAmount)
-            totals.pensionSalaryBasis = totals.pensionSalaryBasis
-                .saturatingAdd(entry.pensionSalaryBasisAmount)
-            totals.adjustmentBasisWorkIncome = totals.adjustmentBasisWorkIncome
-                .saturatingAdd(entry.fullYearAdjustmentBasisAmount)
-            totals.salaryExchangeSacrifice = totals.salaryExchangeSacrifice
-                .saturatingAdd(entry.salaryExchangeSacrifice)
-            totals.salaryExchangePensionContributions = totals.salaryExchangePensionContributions
-                .saturatingAdd(entry.salaryExchangePensionContribution)
-            switch entry.kind {
-            case .annualSalary, .monthlySalary, .oneTimeSalary:
-                totals.workIncome = totals.workIncome.saturatingAdd(amount)
-            case .monthlyOccupationalPension, .annualOccupationalPension:
-                totals.pensionIncome = totals.pensionIncome.saturatingAdd(amount)
-            case .ownCompanyDividend:
-                totals.dividendIncome = totals.dividendIncome.saturatingAdd(amount)
-            }
-            switch entry.kind {
-            case .annualSalary:
-                totals.sgiAnnualRate = totals.sgiAnnualRate.saturatingAdd(amount)
-            case .monthlySalary:
-                totals.sgiAnnualRate = totals.sgiAnnualRate
-                    .saturatingAdd(entry.amount.saturatingMultiply(12))
-            default: break
-            }
-        }
-    }
+    var totals: IncomePlanTotals { support.totals }
 
     func salaryExchangeAllowance(for entryID: UInt64) -> SalaryExchangeAllowance? {
-        guard
-            let entry = entries.first(where: { $0.id == entryID }),
-            let exchange = entry.salaryExchange
-        else { return nil }
-        let totals = totals
-        let selectedContribution = entry.salaryExchangePensionContribution
-        let otherExchange = totals.salaryExchangePensionContributions
-            .saturatingSubtract(selectedContribution)
-        let calculatedContributionsBefore = totals.regularPensionPremiums
-            .saturatingAdd(totals.vacationPensionPremiums)
-            .saturatingAdd(otherExchange)
-        let contributionsBefore = exchange.pensionAndInsuranceCostsBeforeExchange
-            ?? calculatedContributionsBefore
-        let sacrificeInBasis = entry.includedInPensionSalaryBasis
-            ? entry.salaryExchangeSacrifice
-            : 0
-        let currentYearBasisBefore = totals.pensionSalaryBasis.saturatingAdd(sacrificeInBasis)
-        let currentYearBasisAfter = currentYearBasisBefore.saturatingSubtract(sacrificeInBasis)
-        let basisBefore = exchange.previousYearPensionSalaryBasis ?? currentYearBasisBefore
-        let basisAfter = exchange.previousYearPensionSalaryBasis ?? currentYearBasisAfter
-        let ceiling = SalaryExchange.allowanceCeiling(pensionSalaryBasis: basisAfter)
+        guard let row = support.entries.first(where: { $0.entry_id == entryID }), row.has_allowance != 0 else { return nil }
+        let a = row.allowance
         return SalaryExchangeAllowance(
-            ceiling: ceiling,
-            pensionSalaryBasisBefore: basisBefore,
-            pensionSalaryBasisAfter: basisAfter,
-            regularPensionPremiums: totals.regularPensionPremiums,
-            vacationPensionPremiums: totals.vacationPensionPremiums,
-            otherExchangeContributions: otherExchange,
-            pensionContributionsBefore: contributionsBefore,
-            availableContribution: ceiling.saturatingSubtract(contributionsBefore),
-            maximumSacrifice: exchange.maximumSacrifice(
-                paymentAmount: entry.amount,
-                pensionSalaryBasisBefore: basisBefore,
-                pensionContributionsBefore: contributionsBefore,
-                paymentIsPensionable: entry.includedInPensionSalaryBasis
-            )
-        )
+            ceiling: a.ceiling,
+            pensionSalaryBasisBefore: a.pension_salary_basis_before,
+            pensionSalaryBasisAfter: a.pension_salary_basis_after,
+            regularPensionPremiums: a.regular_pension_premiums,
+            vacationPensionPremiums: a.vacation_pension_premiums,
+            otherExchangeContributions: a.other_exchange_contributions,
+            pensionContributionsBefore: a.pension_contributions_before,
+            availableContribution: a.available_contribution,
+            maximumSacrifice: a.maximum_sacrifice)
     }
-
 }
 
 struct IncomePlanTotals: Equatable, Sendable {
@@ -806,11 +466,4 @@ struct PlanCalculation: Equatable, Sendable {
 
 private func percentage(_ amount: UInt32, _ percent: UInt32) -> UInt32 {
     UInt32(min(UInt64(amount) * UInt64(percent) / 100, UInt64(UInt32.max)))
-}
-
-private func roundedBasisPoints(_ amount: UInt32, _ basisPoints: UInt32) -> UInt32 {
-    UInt32(min(
-        (UInt64(amount) * UInt64(basisPoints) + 5_000) / 10_000,
-        UInt64(UInt32.max)
-    ))
 }

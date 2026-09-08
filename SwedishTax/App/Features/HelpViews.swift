@@ -73,7 +73,7 @@ struct AboutView: View {
                 }
                 Section("Rust core and native bridge") {
                     Text("The shared tax-calculation engine is written in Rust.")
-                    Text("The SwiftUI interface calls it through a versioned, typed C FFI bridge.")
+                    Text("The SwiftUI interface calls it through a typed C FFI bridge.")
                     Text("The Swift interface and Rust engine run together as native ARM machine code inside the app, without an interpreter, virtual machine, separate process, or server dependency.")
                 }
             }

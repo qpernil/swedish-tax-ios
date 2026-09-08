@@ -17,6 +17,7 @@ private enum CalculationState {
 struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var workspace: PersistedWorkspace
+    private let savedWorkspaceUnavailable: Bool
     @State private var editingEntryID: UInt64?
     @State private var helpTopic: HelpTopic?
     @State private var showingAbout = false
@@ -67,8 +68,14 @@ struct ContentView: View {
     }
 
     init() {
-        let restored = try? AppStateStore.live.load()
-        _workspace = State(initialValue: restored ?? PersistedWorkspace())
+        do {
+            let restored = try AppStateStore.live.load()
+            _workspace = State(initialValue: restored ?? PersistedWorkspace())
+            savedWorkspaceUnavailable = false
+        } catch {
+            _workspace = State(initialValue: PersistedWorkspace())
+            savedWorkspaceUnavailable = true
+        }
     }
 
     var body: some View {
@@ -77,6 +84,11 @@ struct ContentView: View {
         NavigationStack {
             ScrollView {
                 LazyVStack(spacing: 16) {
+                    if savedWorkspaceUnavailable {
+                        Text("The saved workspace could not be read. Its file is preserved; changes in this session cannot be saved.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
                     hero
                     setupCard
                     incomePlanCard(withholding: calculationState.withholding)
@@ -178,6 +190,7 @@ struct ContentView: View {
             }
         }
         .task(id: workspaceToPersist) {
+            guard !savedWorkspaceUnavailable else { return }
             do {
                 try await Task.sleep(for: .milliseconds(350))
                 try AppStateStore.live.save(workspaceToPersist)
@@ -188,7 +201,7 @@ struct ContentView: View {
             }
         }
         .onChange(of: scenePhase) { _, phase in
-            guard phase != .active else { return }
+            guard phase != .active, !savedWorkspaceUnavailable else { return }
             try? AppStateStore.live.save(workspace)
         }
     }

@@ -6,13 +6,10 @@ enum RustTaxCoreError: Error, Equatable {
     case unsupportedStatus(UInt32)
     case unsupportedDeductionKind(UInt32)
     case invalidResponse(String)
-    case unsupportedContractVersion(UInt32)
 }
 
-/// Thin Swift mapping over the stable C API exported by the Rust tax core.
+/// Thin Swift mapping over the current C API exported by the Rust tax core.
 enum RustTaxCore {
-    private static let contractVersion: UInt32 = 2
-
     static func monthlyDeduction(
         table: UInt8,
         column: TaxColumn,
@@ -113,15 +110,9 @@ enum RustTaxCore {
         ageGroup: TaxAgeGroup,
         plan: IncomePlan
     ) throws -> PlanCalculation {
-        let nativeVersion = swedish_tax_contract_version()
-        guard nativeVersion == contractVersion else {
-            throw RustTaxCoreError.unsupportedContractVersion(nativeVersion)
-        }
-
         let entries = plan.entries.map(entryForRust)
         return try entries.withUnsafeBufferPointer { entries in
             var request = SwedishTaxPlanRequest()
-            request.version = contractVersion
             request.table = UInt32(table)
             request.age_group = ageGroup == .under66 ? 0 : 1
             request.entries = entries.baseAddress
@@ -143,15 +134,9 @@ enum RustTaxCore {
         ageGroup: TaxAgeGroup,
         plan: IncomePlan
     ) throws -> DividendAllowance2027 {
-        let nativeVersion = swedish_tax_contract_version()
-        guard nativeVersion == contractVersion else {
-            throw RustTaxCoreError.unsupportedContractVersion(nativeVersion)
-        }
-
         let entries = plan.entries.map(entryForRust)
         return try entries.withUnsafeBufferPointer { entries in
             var request = SwedishTaxPlanRequest()
-            request.version = contractVersion
             request.table = UInt32(table)
             request.age_group = ageGroup == .under66 ? 0 : 1
             request.entries = entries.baseAddress
@@ -195,6 +180,63 @@ enum RustTaxCore {
                     "Unknown dividend allowance issue \(result.issue_kind)"
                 )
             }
+        }
+    }
+
+    static let planningPolicy = swedish_tax_planning_policy()
+
+    /// Typed editor inputs always decode. A nonzero status is an integration failure,
+    /// never an invitation to substitute a second implementation of the rules.
+    static func entrySupport(_ entry: IncomeEntry) -> SwedishTaxEntrySupport {
+        var input = entryForRust(entry)
+        let result = swedish_tax_entry_support(&input)
+        precondition(result.status == 0, "Rust entry support failed: \(result.status)")
+        return result
+    }
+
+    struct PlanSupport {
+        let totals: IncomePlanTotals
+        let issue: IncomePlanValidationIssue?
+        let entries: [SwedishTaxEntrySupport]
+    }
+
+    static func planSupport(_ plan: IncomePlan) throws -> PlanSupport {
+        let entries = plan.entries.map(entryForRust)
+        return try entries.withUnsafeBufferPointer { entries in
+            var request = SwedishTaxPlanRequest()
+            request.table = 32 // Editor support is independent of the selected table.
+            request.entries = entries.baseAddress
+            request.entries_count = entries.count
+            request.adjustment_percent = optional(plan.adjustmentPercent)
+            request.dividend_allowance = dividendAllowanceForRust(plan.dividendAllowance)
+            let result = swedish_tax_plan_support(&request)
+            defer { swedish_tax_plan_support_free(result) }
+            try checkStatus(result.status)
+            guard result.entries_count == entries.count,
+                  result.entries_count <= result.entries_capacity,
+                  result.entries_count == 0 || result.entries != nil else {
+                throw RustTaxCoreError.invalidResponse("Invalid planning buffer")
+            }
+            let issue: IncomePlanValidationIssue?
+            switch result.issue_kind {
+            case 0: issue = nil
+            case 1: issue = .invalidPaymentPeriod(entryID: result.issue_entry_id)
+            case 2: issue = .salaryExchangeExceedsAllowance(entryID: result.issue_entry_id, maximum: result.issue_maximum)
+            default: throw RustTaxCoreError.invalidResponse("Unknown planning issue")
+            }
+            let t = result.totals
+            return PlanSupport(totals: IncomePlanTotals(
+                workIncome: t.work_income,
+                pensionIncome: t.pension_income,
+                dividendIncome: t.dividend_income,
+                sgiAnnualRate: t.sgi_annual_rate,
+                adjustmentBasisWorkIncome: t.adjustment_basis_work_income,
+                pensionSalaryBasis: t.pension_salary_basis,
+                regularPensionPremiums: t.regular_pension_premiums,
+                vacationPensionPremiums: t.vacation_pension_premiums,
+                salaryExchangeSacrifice: t.salary_exchange_sacrifice,
+                salaryExchangePensionContributions: t.salary_exchange_pension_contributions), issue: issue,
+                entries: Array(UnsafeBufferPointer(start: result.entries, count: result.entries_count)))
         }
     }
 

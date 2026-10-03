@@ -17,15 +17,31 @@ jobs:
         with:
           path: swedish-tax-ios
 
+      - name: Read native engine pin
+        id: engine
+        working-directory: swedish-tax-ios
+        run: |
+          python3 - <<'PYTHON'
+          import json, os
+          pin = json.load(open('native-engine.json'))
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              for key in ('revision', 'rust_toolchain'):
+                  output.write(key + '=' + pin[key] + '\n')
+          with open(os.environ['GITHUB_ENV'], 'a') as environment:
+              environment.write('RUSTUP_TOOLCHAIN=' + pin['rust_toolchain'] + '\n')
+          PYTHON
+
       - name: Check out Rust tax core
         uses: actions/checkout@v7
         with:
           repository: qpernil/swedish-tax
+          ref: ${{ steps.engine.outputs.revision }}
           path: swedish-tax
 
       - name: Install Rust with iOS targets
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ steps.engine.outputs.rust_toolchain }}
           targets: aarch64-apple-ios,aarch64-apple-ios-sim
 
       - name: Build Rust XCFramework

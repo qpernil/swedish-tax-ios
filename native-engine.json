@@ -1,5 +1,5 @@
 {
   "repository": "https://github.com/qpernil/swedish-tax",
   "revision": "3eb4bed49d8b26024f023146b90cac7ecaf60c58",
-  "rust_toolchain": "1.98.1"
+  "rust_toolchain": "stable"
 }

@@ -54,7 +54,7 @@ user input.
 - Xcode 26 or later
 - iOS 18 or later
 - Swift 6
-- Rust with the `aarch64-apple-ios` and `aarch64-apple-ios-sim` targets
+- Stable Rust with the `aarch64-apple-ios` and `aarch64-apple-ios-sim` targets
 
 The iOS 18 deployment target satisfies the Rust calculation engine's
 128-bit arithmetic runtime requirements.
@@ -66,7 +66,7 @@ repository. Build its device and Apple Silicon simulator slices in the
 `swedish-tax` repository:
 
 ```sh
-RUSTUP_TOOLCHAIN=1.98.1 cargo xtask ios --release
+RUSTUP_TOOLCHAIN=stable cargo xtask ios --release
 ```
 
 This creates `target/ios/SwedishTaxCore.xcframework`. Give Xcode the containing

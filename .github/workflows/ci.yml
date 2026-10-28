@@ -17,25 +17,25 @@ jobs:
         with:
           path: swedish-tax-ios
 
-      - name: Read native engine pin
+      - name: Read native engine configuration
         id: engine
         working-directory: swedish-tax-ios
         run: |
           python3 - <<'PYTHON'
           import json, os
-          pin = json.load(open('native-engine.json'))
+          engine = json.load(open('native-engine.json'))
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              for key in ('revision', 'rust_toolchain'):
-                  output.write(key + '=' + pin[key] + '\n')
+              for key in ('branch', 'rust_toolchain'):
+                  output.write(key + '=' + engine[key] + '\n')
           with open(os.environ['GITHUB_ENV'], 'a') as environment:
-              environment.write('RUSTUP_TOOLCHAIN=' + pin['rust_toolchain'] + '\n')
+              environment.write('RUSTUP_TOOLCHAIN=' + engine['rust_toolchain'] + '\n')
           PYTHON
 
       - name: Check out Rust tax core
         uses: actions/checkout@v7
         with:
           repository: qpernil/swedish-tax
-          ref: ${{ steps.engine.outputs.revision }}
+          ref: ${{ steps.engine.outputs.branch }}
           path: swedish-tax
 
       - name: Install Rust with iOS targets
